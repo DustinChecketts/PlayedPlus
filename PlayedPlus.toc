@@ -1,0 +1,10 @@
+## Interface: 20506
+## Title: Played Plus
+## Notes: Expands /played with level history, XP source tracking, daily activity, and account-wide playtime across realms.
+## Author: Dustin
+## Version: 1.0.0
+## SavedVariables: PlayedPlusAccountDB, PlayedTrackerPlusAccountDB
+## SavedVariablesPerCharacter: PlayedPlusDB, PlayedTrackerPlusDB
+
+PlayedPlus.lua
+Options.lua
