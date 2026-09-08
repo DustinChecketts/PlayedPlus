@@ -2819,7 +2819,6 @@ local function CreateHistoryUI()
     )
     frame.accountButton:SetScript("OnClick", function()
         currentView = "account"
-        RequestPlayedSync()
         RefreshHistoryUI()
     end)
 
@@ -3262,7 +3261,7 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         CreateHistoryUI()
 
         Print(
-            "v1.0.1 loaded. Type /pp to open Played Plus."
+            "v1.0.2 loaded. Type /pp to open Played Plus."
         )
 
     elseif event == "PLAYER_ENTERING_WORLD" then
