@@ -612,13 +612,7 @@ local function EnsureCurrentLevelBaseline()
     local db = EnsureDatabase()
     local level = UnitLevel("player") or db.currentLevel or 1
 
-    if historyFrame.characterLine then
-        historyFrame.characterLine:SetText(
-            tostring(UnitName("player") or "Unknown")
-            .. "  •  "
-            .. tostring(GetRealmKey())
-        )
-    end
+    RefreshCharacterHeader()
     local levelData = EnsureLevel(level)
     local currentXP = UnitXP("player") or 0
     local requiredXP = UnitXPMax("player") or 0
@@ -1753,6 +1747,35 @@ local function SetButtonSelected(button, selected)
     end
 end
 
+local function RefreshCharacterHeader()
+    if not historyFrame then
+        return
+    end
+
+    local name = UnitName("player") or "Unknown"
+    local realm = GetRealmKey()
+    local level = UnitLevel("player") or 1
+    local localizedClass = UnitClass("player") or "Unknown"
+
+    if historyFrame.characterName then
+        historyFrame.characterName:SetText(name)
+    end
+
+    if historyFrame.characterMeta then
+        historyFrame.characterMeta:SetText(
+            string.format("Level %d %s  •  %s", level, localizedClass, realm)
+        )
+    end
+
+    if historyFrame.portrait then
+        if SetPortraitTexture then
+            SetPortraitTexture(historyFrame.portrait, "player")
+        else
+            SetPortraitTextureFromCreatureDisplayID(historyFrame.portrait, 0)
+        end
+    end
+end
+
 local function ApplyWindowOpacity()
     if not historyFrame or not historyFrame.background then
         return
@@ -1778,7 +1801,7 @@ end
 
 local function CreateSegment(parent, color)
     local segment = CreateFrame("Frame", nil, parent)
-    segment:SetHeight(20)
+    segment:SetHeight(18)
     segment:EnableMouse(true)
 
     segment.texture = segment:CreateTexture(nil, "ARTWORK")
@@ -1838,7 +1861,7 @@ end
 
 local function CreateCharacterSegment(parent)
     local segment = CreateFrame("Frame", nil, parent)
-    segment:SetHeight(20)
+    segment:SetHeight(18)
     segment:EnableMouse(true)
 
     segment.texture = segment:CreateTexture(nil, "ARTWORK")
@@ -1875,7 +1898,7 @@ end
 
 local function CreateAccountSegment(parent)
     local segment = CreateFrame("Frame", nil, parent)
-    segment:SetHeight(20)
+    segment:SetHeight(18)
     segment:EnableMouse(true)
 
     segment.texture = segment:CreateTexture(nil, "ARTWORK")
@@ -1983,7 +2006,7 @@ local function RenderCharacterSegments(row, segments, totalSeconds, barWidth)
         segment:ClearAllPoints()
         segment:SetPoint("LEFT", row.barFrame, "LEFT", offset, 0)
         segment:SetWidth(math.max(1, width))
-        segment:SetHeight(20)
+        segment:SetHeight(18)
         segment.texture:SetVertexColor(color[1], color[2], color[3], color[4])
         segment.characterName = data.name
         segment.classFile = data.classFile
@@ -2051,14 +2074,14 @@ local function CreateHistoryRow(parent, index)
         parent,
         "TOPLEFT",
         18,
-        -160 - ((index - 1) * 36)
+        -198 - ((index - 1) * 36)
     )
 
     if index % 2 == 0 then
         row.background = row:CreateTexture(nil, "BACKGROUND")
         row.background:SetAllPoints()
         row.background:SetTexture("Interface\\Buttons\\WHITE8X8")
-        row.background:SetVertexColor(1, 1, 1, 0.035)
+        row.background:SetVertexColor(0.42, 0.31, 0.16, 0.10)
     end
 
     row.level = CreateText(
@@ -2349,7 +2372,7 @@ local function RenderRow(row, data, view)
         row.accountSegment:ClearAllPoints()
         row.accountSegment:SetPoint("LEFT", row.barFrame, "LEFT", 0, 0)
         row.accountSegment:SetWidth(math.max(1, width))
-        row.accountSegment:SetHeight(20)
+        row.accountSegment:SetHeight(18)
         row.accountSegment.texture:SetVertexColor(
             color[1], color[2], color[3], color[4]
         )
@@ -2456,7 +2479,7 @@ local function ApplyHeaderLayout()
         historyFrame,
         "TOPLEFT",
         222,
-        -130
+        -182
     )
     historyFrame.barHeader:SetWidth(barWidth)
 
@@ -2468,7 +2491,7 @@ local function ApplyHeaderLayout()
             historyFrame,
             "TOPLEFT",
             18 + detailsX,
-            -144
+            -182
         )
     else
         historyFrame.detailsHeader:Hide()
@@ -2482,7 +2505,7 @@ local function ApplyHeaderLayout()
             historyFrame,
             "TOPLEFT",
             18 + statusX,
-            -144
+            -182
         )
     else
         historyFrame.statusHeader:Hide()
@@ -2582,23 +2605,20 @@ local function RefreshHistoryUI()
     local dataRows
 
     if currentView == "levels" then
-        historyFrame.windowTitle:SetText(
-            "Played Plus — Level History"
-        )
+        historyFrame.windowTitle:SetText("Played Plus")
+        historyFrame.sectionTitle:SetText("Level History")
         historyFrame.leftHeader:SetText("Level")
         historyFrame.barHeader:SetText("XP progress by source")
         dataRows = CollectLevelRows()
     elseif currentView == "days" then
-        historyFrame.windowTitle:SetText(
-            "Played Plus — Realm Daily History"
-        )
+        historyFrame.windowTitle:SetText("Played Plus")
+        historyFrame.sectionTitle:SetText("Realm Daily History")
         historyFrame.leftHeader:SetText("Date")
         historyFrame.barHeader:SetText("Played time by character")
         dataRows = CollectDayRows()
     else
-        historyFrame.windowTitle:SetText(
-            "Played Plus — Account /played"
-        )
+        historyFrame.windowTitle:SetText("Played Plus")
+        historyFrame.sectionTitle:SetText("Account /played")
         historyFrame.leftHeader:SetText("Class")
         historyFrame.barHeader:SetText("Share of lifetime account /played")
         dataRows = CollectAccountRows()
@@ -2648,7 +2668,7 @@ local function CreateHistoryUI()
         end
     end
 
-    frame:SetSize(1000, 570)
+    frame:SetSize(1000, 600)
     frame:SetPoint("CENTER")
     frame:SetFrameStrata("DIALOG")
     frame:SetClampedToScreen(true)
@@ -2697,17 +2717,55 @@ local function CreateHistoryUI()
         end)
     end
 
-    frame.characterLine = CreateText(
+    -- Character-sheet style identity block. The live unit portrait keeps this
+    -- native and automatically matches the character being documented.
+    frame.portraitFrame = CreateFrame("Frame", nil, frame)
+    frame.portraitFrame:SetSize(58, 58)
+    frame.portraitFrame:SetPoint("TOPLEFT", frame, "TOPLEFT", 22, -42)
+
+    frame.portrait = frame.portraitFrame:CreateTexture(nil, "ARTWORK")
+    frame.portrait:SetSize(48, 48)
+    frame.portrait:SetPoint("CENTER")
+    frame.portrait:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+
+    frame.portraitBorder = frame.portraitFrame:CreateTexture(nil, "OVERLAY")
+    frame.portraitBorder:SetAllPoints()
+    frame.portraitBorder:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
+    frame.portraitBorder:SetTexCoord(0, 0.6, 0, 0.6)
+
+    frame.characterName = CreateText(
+        frame,
+        "GameFontNormalLarge",
+        "TOPLEFT",
+        frame,
+        "TOPLEFT",
+        88,
+        -48,
+        "LEFT"
+    )
+
+    frame.characterMeta = CreateText(
         frame,
         "GameFontHighlightSmall",
+        "TOPLEFT",
+        frame,
+        "TOPLEFT",
+        89,
+        -72,
+        "LEFT"
+    )
+    frame.characterMeta:SetTextColor(0.82, 0.72, 0.52, 1)
+
+    frame.sectionTitle = CreateText(
+        frame,
+        "GameFontNormal",
         "TOP",
         frame,
         "TOP",
         0,
-        -43,
+        -54,
         "CENTER"
     )
-    frame.characterLine:SetTextColor(0.82, 0.72, 0.52, 1)
 
     frame.summaryLevel = CreateText(
         frame,
@@ -2716,7 +2774,7 @@ local function CreateHistoryUI()
         frame,
         "TOPLEFT",
         24,
-        -68,
+        -106,
         "LEFT"
     )
 
@@ -2727,7 +2785,7 @@ local function CreateHistoryUI()
         frame,
         "TOPLEFT",
         370,
-        -68,
+        -106,
         "LEFT"
     )
 
@@ -2738,7 +2796,7 @@ local function CreateHistoryUI()
         frame,
         "TOPLEFT",
         680,
-        -68,
+        -106,
         "LEFT"
     )
 
@@ -2753,7 +2811,7 @@ local function CreateHistoryUI()
         frame,
         "TOPLEFT",
         24,
-        -98
+        -136
     )
     frame.levelsButton:SetScript("OnClick", function()
         currentView = "levels"
@@ -2807,7 +2865,7 @@ local function CreateHistoryUI()
         frame,
         "TOPRIGHT",
         -24,
-        -98
+        -136
     )
     syncButton:SetScript("OnClick", function()
         RequestPlayedSync()
@@ -2820,14 +2878,14 @@ local function CreateHistoryUI()
         frame,
         "TOPLEFT",
         24,
-        -135
+        -173
     )
     separator:SetPoint(
         "TOPRIGHT",
         frame,
         "TOPRIGHT",
         -24,
-        -135
+        -173
     )
     separator:SetHeight(1)
     separator:SetTexture("Interface\\Buttons\\WHITE8X8")
@@ -2840,7 +2898,7 @@ local function CreateHistoryUI()
         frame,
         "TOPLEFT",
         28,
-        -144,
+        -182,
         "LEFT"
     )
 
@@ -2851,7 +2909,7 @@ local function CreateHistoryUI()
         frame,
         "TOPLEFT",
         112,
-        -144,
+        -182,
         "LEFT"
     )
     timeHeader:SetText("Time played")
@@ -2863,7 +2921,7 @@ local function CreateHistoryUI()
         frame,
         "TOPLEFT",
         222,
-        -144,
+        -182,
         "CENTER"
     )
 
@@ -2874,7 +2932,7 @@ local function CreateHistoryUI()
         frame,
         "TOPLEFT",
         720,
-        -144,
+        -182,
         "CENTER"
     )
     frame.detailsHeader:SetWidth(160)
@@ -2887,7 +2945,7 @@ local function CreateHistoryUI()
         frame,
         "TOPLEFT",
         892,
-        -144,
+        -182,
         "CENTER"
     )
     frame.statusHeader:SetWidth(65)
@@ -2970,6 +3028,7 @@ local function CreateHistoryUI()
 
     frame:SetScript("OnShow", function()
         ApplyWindowOpacity()
+        RefreshCharacterHeader()
         RefreshHistoryUI()
     end)
 
