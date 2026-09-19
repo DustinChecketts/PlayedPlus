@@ -39,9 +39,10 @@ local eventFrame = CreateFrame("Frame")
 -- Configuration and runtime constants
 -- ============================================================================
 -- Schema versions change only when persisted data requires migration.
-local DB_VERSION = 27
+local DB_VERSION = 28
 local ACCOUNT_DB_VERSION = 3
 local LEDGER_VERSION = 1
+local HISTORY_VERSION = 1
 local TICK_INTERVAL = 1
 -- XP collection is event-driven first, with UnitXP polling as a reliability
 -- backstop. Classification queues are runtime-only and never persisted.
@@ -198,6 +199,7 @@ local function EnsureDatabase()
     db.days = db.days or {}
     db.levels = db.levels or {}
     db.nextXPEventID = tonumber(db.nextXPEventID) or 1
+    db.historyVersion = tonumber(db.historyVersion) or 0
 
     db.windowOpacity = tonumber(db.windowOpacity) or 0.70
     db.windowOpacity = Clamp(db.windowOpacity, 0.20, 1.00)
@@ -1558,6 +1560,72 @@ local function GetLevelExplorationCount(levelData)
     return count
 end
 
+-- Build a compact, permanent record for a completed level. During the
+-- recovery migration we intentionally retain every existing ledger. Pruning
+-- is enabled only after the summary format has been proven against live data.
+local function BuildLevelSummary(levelData)
+    if type(levelData) ~= "table" or not levelData.completedAt then
+        return nil
+    end
+
+    local totals = AggregateLevelXP(levelData)
+    local summary = {
+        version = HISTORY_VERSION,
+        level = tonumber(levelData.level) or 0,
+        startedAt = levelData.startedAt,
+        completedAt = levelData.completedAt,
+        seconds = tonumber(levelData.seconds) or 0,
+        xpRequired = tonumber(levelData.xpRequired) or totals.total or 0,
+        quests = tonumber(levelData.quests) or 0,
+        kills = GetLevelKillCount(levelData),
+        explorations = GetLevelExplorationCount(levelData),
+        dungeons = tonumber(levelData.dungeons) or 0,
+        xp = {
+            mob = totals.mob,
+            quest = totals.quest,
+            dungeon = totals.dungeon,
+            exploration = totals.exploration,
+            other = totals.other,
+            total = totals.total,
+        },
+    }
+
+    levelData.summary = summary
+    return summary
+end
+
+local function EnsureHistoricalSummaries()
+    local db = EnsureDatabase()
+
+    for _, levelData in pairs(db.levels or {}) do
+        if type(levelData) == "table" and levelData.completedAt then
+            if type(levelData.summary) ~= "table"
+                or tonumber(levelData.summary.version) ~= HISTORY_VERSION then
+                BuildLevelSummary(levelData)
+            end
+        end
+    end
+
+    db.historyVersion = HISTORY_VERSION
+end
+
+local function GetHistoricalLevelNumbers()
+    local db = EnsureDatabase()
+    local levels = {}
+
+    for key, levelData in pairs(db.levels or {}) do
+        if type(levelData) == "table" then
+            local level = tonumber(levelData.level) or tonumber(key)
+            if level then
+                table.insert(levels, level)
+            end
+        end
+    end
+
+    table.sort(levels, function(a, b) return a > b end)
+    return levels
+end
+
 local function GetLevelBreakdown(levelData, isCurrent)
     local totals = AggregateLevelXP(levelData)
     local mix = {
@@ -2238,8 +2306,16 @@ local function CollectLevelRows()
     local db = EnsureDatabase()
     local currentLevel = UnitLevel("player") or db.currentLevel or 1
     local rows = {}
+    local levels = GetHistoricalLevelNumbers()
 
-    for level = currentLevel, math.max(1, currentLevel - MAX_ROWS + 1), -1 do
+    -- Historical records are evidence. Enumerate the records that actually
+    -- exist instead of assuming db.currentLevel defines the valid range.
+    -- This keeps older/later records visible even if metadata was damaged.
+    for _, level in ipairs(levels) do
+        if #rows >= MAX_ROWS then
+            break
+        end
+
         local levelData = db.levels[level]
 
         if levelData then
@@ -3171,6 +3247,7 @@ local function ShowHelp()
     Print("/pp sync - request a fresh /played total")
     Print("/pp xplog [number|all] - show current-level XP ledger")
     Print("/pp debugxp - toggle live XP debug logging")
+    Print("/pp integrity - audit persisted history without changing it")
     Print("/ptp remains available as a compatibility alias")
 end
 
@@ -3214,6 +3291,55 @@ SlashCmdList["PLAYEDPLUS"] = function(msg)
             "Live XP debug logging "
             .. (db.debugXPLog and "|cff33ff33enabled|r." or "|cffff5555disabled|r.")
         )
+    elseif msg == "integrity" then
+        local db = EnsureDatabase()
+        local liveLevel = UnitLevel("player") or 0
+        local storedLevel = tonumber(db.currentLevel) or 0
+        local levelCount, minLevel, maxLevel, ledgerCount, summaryCount = 0, nil, nil, 0, 0
+        local dayCount = 0
+
+        for key, levelData in pairs(db.levels or {}) do
+            if type(levelData) == "table" then
+                local level = tonumber(levelData.level) or tonumber(key)
+                levelCount = levelCount + 1
+                if level then
+                    minLevel = not minLevel and level or math.min(minLevel, level)
+                    maxLevel = not maxLevel and level or math.max(maxLevel, level)
+                end
+                ledgerCount = ledgerCount + #(levelData.ledger or {})
+                if type(levelData.summary) == "table" then
+                    summaryCount = summaryCount + 1
+                end
+            end
+        end
+
+        for _ in pairs(db.days or {}) do
+            dayCount = dayCount + 1
+        end
+
+        local accountDB = EnsureAccountDatabase()
+        local realmCount, characterCount, accountDayCount = 0, 0, 0
+        for _, realm in pairs(accountDB.realms or {}) do
+            realmCount = realmCount + 1
+            for _ in pairs(realm.characters or {}) do
+                characterCount = characterCount + 1
+            end
+            for _ in pairs(realm.days or {}) do
+                accountDayCount = accountDayCount + 1
+            end
+        end
+
+        Print(string.format(
+            "Integrity: live L%d | stored L%d | records %d (L%s-L%s) | summaries %d | ledger events %d | days %d",
+            liveLevel, storedLevel, levelCount, tostring(minLevel or "?"), tostring(maxLevel or "?"),
+            summaryCount, ledgerCount, dayCount
+        ))
+        Print(string.format(
+            "Account: %d realm%s | %d character%s | %d day record%s",
+            realmCount, realmCount == 1 and "" or "s",
+            characterCount, characterCount == 1 and "" or "s",
+            accountDayCount, accountDayCount == 1 and "" or "s"
+        ))
     elseif msg == "account" then
         RequestPlayedSync()
 
@@ -3280,6 +3406,7 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         local db = EnsureDatabase()
 
         MigrateLedger()
+        EnsureHistoricalSummaries()
         EnsureAccountDatabase()
         ImportLegacyCharacterDays()
         SyncAllCharacterDaysToAccount()
@@ -3371,6 +3498,10 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
             or oldLevelData.xpRequired <= 0 then
             oldLevelData.xpRequired = observedXPMax or 0
         end
+
+        -- Freeze the completed level into its compact permanent summary.
+        -- Recovery build: keep the raw ledger as well; no pruning yet.
+        BuildLevelSummary(oldLevelData)
 
         db.currentLevel = newLevel
 
