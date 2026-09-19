@@ -72,7 +72,7 @@ local XP_COLORS = {
     mob = { 0.25, 0.70, 0.20, 0.95 },
     quest = { 0.15, 0.45, 0.85, 0.95 },
     dungeon = { 0.55, 0.20, 0.75, 0.95 },
-    exploration = { 0.90, 0.22, 0.10, 0.95 },
+    exploration = { 0.95, 0.72, 0.08, 0.95 },
     other = { 0.50, 0.50, 0.50, 0.95 },
 }
 
@@ -2108,7 +2108,7 @@ local function CreateHistoryRow(parent, index)
         parent,
         "TOPLEFT",
         18,
-        -204 - ((index - 1) * 36)
+        -226 - ((index - 1) * 36)
     )
 
     if index % 2 == 0 then
@@ -2152,21 +2152,25 @@ local function CreateHistoryRow(parent, index)
     row.barBackground:SetVertexColor(0.055, 0.040, 0.022, 0.98)
 
     row.barEdges = {}
-    local function AddBarEdge(pointA, pointB, width, height)
+    local borderColor = { 0.58, 0.43, 0.23, 0.95 }
+    local function AddBarEdge(point, relativePoint, x, y, width, height)
         local edge = row.barFrame:CreateTexture(nil, "OVERLAY", nil, 7)
-        edge:SetPoint(pointA)
-        edge:SetPoint(pointB)
-        if width then edge:SetWidth(width) end
-        if height then edge:SetHeight(height) end
+        edge:SetPoint(point, row.barFrame, relativePoint, x, y)
+        edge:SetSize(width, height)
         edge:SetTexture("Interface\\Buttons\\WHITE8X8")
-        edge:SetVertexColor(0.58, 0.43, 0.23, 0.95)
+        edge:SetVertexColor(borderColor[1], borderColor[2], borderColor[3], borderColor[4])
         table.insert(row.barEdges, edge)
     end
 
-    AddBarEdge("TOPLEFT", "TOPRIGHT", nil, 1)
-    AddBarEdge("BOTTOMLEFT", "BOTTOMRIGHT", nil, 1)
-    AddBarEdge("TOPLEFT", "BOTTOMLEFT", 1, nil)
-    AddBarEdge("TOPRIGHT", "BOTTOMRIGHT", 1, nil)
+    -- Draw all four edges one logical pixel inside the bar. Keeping every edge
+    -- on the same coordinate convention avoids half-pixel rasterization at
+    -- fractional UI scales and prevents the fill from obscuring the left edge.
+    AddBarEdge("TOPLEFT", "TOPLEFT", 0, 0, 1, 20)
+    AddBarEdge("TOPRIGHT", "TOPRIGHT", 0, 0, 1, 20)
+    AddBarEdge("TOPLEFT", "TOPLEFT", 0, 0, 1, 1)
+    row.barEdges[3]:SetWidth(row.barFrame:GetWidth())
+    AddBarEdge("BOTTOMLEFT", "BOTTOMLEFT", 0, 0, 1, 1)
+    row.barEdges[4]:SetWidth(row.barFrame:GetWidth())
 
     row.mobSegment = CreateSegment(row.barFrame, XP_COLORS.mob)
     row.questSegment = CreateSegment(row.barFrame, XP_COLORS.quest)
@@ -2261,6 +2265,10 @@ local function ApplyRowLayout(row)
     row.barFrame:ClearAllPoints()
     row.barFrame:SetPoint("LEFT", row, "LEFT", 204, 0)
     row.barFrame:SetWidth(barWidth)
+    if row.barEdges then
+        row.barEdges[3]:SetWidth(barWidth)
+        row.barEdges[4]:SetWidth(barWidth)
+    end
 
     if db.showDetails then
         row.details:Show()
@@ -2526,7 +2534,7 @@ local function ApplyHeaderLayout()
         historyFrame,
         "TOPLEFT",
         222,
-        -188
+        -210
     )
     historyFrame.barHeader:SetWidth(barWidth)
 
@@ -2538,7 +2546,7 @@ local function ApplyHeaderLayout()
             historyFrame,
             "TOPLEFT",
             18 + detailsX,
-            -188
+            -210
         )
     else
         historyFrame.detailsHeader:Hide()
@@ -2552,7 +2560,7 @@ local function ApplyHeaderLayout()
             historyFrame,
             "TOPLEFT",
             18 + statusX,
-            -188
+            -210
         )
     else
         historyFrame.statusHeader:Hide()
@@ -2790,11 +2798,35 @@ local function CreateHistoryUI()
         frame.portrait:AddMaskTexture(frame.portraitMask)
     end
 
-    frame.portraitBorder = frame.portraitFrame:CreateTexture(nil, "OVERLAY")
-    frame.portraitBorder:SetSize(68, 68)
-    frame.portraitBorder:SetPoint("CENTER")
-    frame.portraitBorder:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
-    frame.portraitBorder:SetTexCoord(0, 0.6, 0, 0.6)
+    -- Draw our own restrained circular presentation: the portrait is masked to
+    -- a circle, with two thin circular rings layered around it. These use the
+    -- same alpha mask as geometry rather than scaling the chunky Minimap frame.
+    frame.portraitRingOuter = frame.portraitFrame:CreateTexture(nil, "OVERLAY")
+    frame.portraitRingOuter:SetSize(64, 64)
+    frame.portraitRingOuter:SetPoint("CENTER")
+    frame.portraitRingOuter:SetTexture("Interface\\Buttons\\WHITE8X8")
+    frame.portraitRingOuter:SetVertexColor(0.50, 0.34, 0.14, 1)
+
+    frame.portraitRingInner = frame.portraitFrame:CreateTexture(nil, "OVERLAY")
+    frame.portraitRingInner:SetSize(60, 60)
+    frame.portraitRingInner:SetPoint("CENTER")
+    frame.portraitRingInner:SetTexture("Interface\\Buttons\\WHITE8X8")
+    frame.portraitRingInner:SetVertexColor(0.08, 0.06, 0.035, 1)
+
+    if frame.portrait.CreateMaskTexture and frame.portrait.AddMaskTexture then
+        frame.ringMaskOuter = frame.portraitFrame:CreateMaskTexture()
+        frame.ringMaskOuter:SetTexture("Interface\\CharacterFrame\\TempPortraitAlphaMask", "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+        frame.ringMaskOuter:SetAllPoints(frame.portraitRingOuter)
+        frame.portraitRingOuter:AddMaskTexture(frame.ringMaskOuter)
+
+        frame.ringMaskInner = frame.portraitFrame:CreateMaskTexture()
+        frame.ringMaskInner:SetTexture("Interface\\CharacterFrame\\TempPortraitAlphaMask", "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+        frame.ringMaskInner:SetAllPoints(frame.portraitRingInner)
+        frame.portraitRingInner:AddMaskTexture(frame.ringMaskInner)
+    end
+
+    -- Portrait sits above the inner disc, leaving a narrow bronze ring visible.
+    frame.portrait:SetDrawLayer("OVERLAY", 2)
 
     frame.characterName = CreateText(
         frame,
@@ -2837,7 +2869,7 @@ local function CreateHistoryUI()
         frame,
         "TOPLEFT",
         28,
-        -142,
+        -166,
         "LEFT"
     )
 
@@ -2848,7 +2880,7 @@ local function CreateHistoryUI()
         frame,
         "TOPLEFT",
         390,
-        -142,
+        -166,
         "LEFT"
     )
 
@@ -2859,7 +2891,7 @@ local function CreateHistoryUI()
         frame,
         "TOPLEFT",
         700,
-        -142,
+        -166,
         "LEFT"
     )
 
@@ -2874,7 +2906,7 @@ local function CreateHistoryUI()
         frame,
         "TOPRIGHT",
         -348,
-        -55
+        -124
     )
     frame.levelsButton:SetScript("OnClick", function()
         currentView = "levels"
@@ -2928,7 +2960,7 @@ local function CreateHistoryUI()
         frame,
         "TOPRIGHT",
         -24,
-        -91
+        -124
     )
     syncButton:SetScript("OnClick", function()
         RequestPlayedSync()
@@ -2941,14 +2973,14 @@ local function CreateHistoryUI()
         frame,
         "TOPLEFT",
         24,
-        -179
+        -201
     )
     separator:SetPoint(
         "TOPRIGHT",
         frame,
         "TOPRIGHT",
         -24,
-        -179
+        -201
     )
     separator:SetHeight(1)
     separator:SetTexture("Interface\\Buttons\\WHITE8X8")
