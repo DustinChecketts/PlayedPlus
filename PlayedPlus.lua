@@ -2102,13 +2102,13 @@ end
 
 local function CreateHistoryRow(parent, index)
     local row = CreateFrame("Frame", nil, parent)
-    row:SetSize(960, 32)
+    row:SetSize(860, 28)
     row:SetPoint(
         "TOPLEFT",
         parent,
         "TOPLEFT",
         18,
-        -186 - ((index - 1) * 34)
+        -166 - ((index - 1) * 30)
     )
 
     if index % 2 == 0 then
@@ -2136,31 +2136,25 @@ local function CreateHistoryRow(parent, index)
         "LEFT",
         row,
         "LEFT",
-        96,
+        88,
         0,
         "LEFT"
     )
-    row.time:SetWidth(104)
+    row.time:SetWidth(96)
 
-    row.barFrame = CreateFrame("Frame", nil, row, BackdropTemplateMixin and "BackdropTemplate" or nil)
-    row.barFrame:SetHeight(20)
-    row.barFrame:SetPoint("LEFT", row, "LEFT", 204, 0)
+    row.barFrame = CreateFrame("Frame", nil, row)
+    row.barFrame:SetHeight(18)
+    row.barFrame:SetPoint("LEFT", row, "LEFT", 190, 0)
 
-    -- One backdrop owns the entire bar outline. Using one native backdrop
-    -- avoids four independently-rasterized 1px textures producing uneven edges.
-    row.barFrame:SetBackdrop({
-        bgFile = "Interface\\Buttons\\WHITE8X8",
-        edgeFile = "Interface\\Buttons\\WHITE8X8",
-        edgeSize = 1,
-        insets = { left = 1, right = 1, top = 1, bottom = 1 },
-    })
-    row.barFrame:SetBackdropColor(0.055, 0.040, 0.022, 0.98)
-    row.barFrame:SetBackdropBorderColor(0.58, 0.43, 0.23, 0.95)
+    -- A borderless, uniform track renders consistently at fractional UI scales.
+    -- The colored segments themselves provide the visual edge.
+    row.barBackground = row.barFrame:CreateTexture(nil, "BACKGROUND")
+    row.barBackground:SetAllPoints()
+    row.barBackground:SetTexture("Interface\\Buttons\\WHITE8X8")
+    row.barBackground:SetVertexColor(0.045, 0.038, 0.028, 0.98)
 
-    -- Keep colored fills off the outline itself.
     row.barContent = CreateFrame("Frame", nil, row.barFrame)
-    row.barContent:SetPoint("TOPLEFT", row.barFrame, "TOPLEFT", 1, -1)
-    row.barContent:SetPoint("BOTTOMRIGHT", row.barFrame, "BOTTOMRIGHT", -1, 1)
+    row.barContent:SetAllPoints()
 
     row.mobSegment = CreateSegment(row.barContent, XP_COLORS.mob)
     row.questSegment = CreateSegment(row.barContent, XP_COLORS.quest)
@@ -2191,7 +2185,7 @@ local function CreateHistoryRow(parent, index)
         0,
         "LEFT"
     )
-    row.details:SetWidth(160)
+    row.details:SetWidth(155)
 
     row.status = CreateText(
         row,
@@ -2208,55 +2202,27 @@ local function CreateHistoryRow(parent, index)
     return row
 end
 
-local function GetRowLayout()
-    local db = EnsureDatabase()
+local function GetRowLayout(view)
+    local rowWidth = 860
+    local barX = 190
 
-    local rowWidth = 960
-    local barX = 204
-    local rightPadding = 10
-    local gap = 12
-    local detailsWidth = 160
-    local statusWidth = 65
-
-    local reserved = rightPadding
-
-    if db.showDetails then
-        reserved = reserved + gap + detailsWidth
+    if view == "levels" then
+        local activityX = 700
+        return activityX - barX - 12, activityX, nil
     end
 
-    if db.showStatus then
-        reserved = reserved + gap + statusWidth
-    end
-
-    local barWidth = rowWidth - barX - reserved
-    local cursor = barX + barWidth
-
-    local detailsX = nil
-    local statusX = nil
-
-    if db.showDetails then
-        cursor = cursor + gap
-        detailsX = cursor
-        cursor = cursor + detailsWidth
-    end
-
-    if db.showStatus then
-        cursor = cursor + gap
-        statusX = cursor
-    end
-
-    return barWidth, detailsX, statusX
+    -- Days and Account devote the rest of the row to the visualization.
+    return rowWidth - barX - 8, nil, nil
 end
 
-local function ApplyRowLayout(row)
-    local db = EnsureDatabase()
-    local barWidth, detailsX, statusX = GetRowLayout()
+local function ApplyRowLayout(row, view)
+    local barWidth, detailsX = GetRowLayout(view)
 
     row.barFrame:ClearAllPoints()
-    row.barFrame:SetPoint("LEFT", row, "LEFT", 204, 0)
+    row.barFrame:SetPoint("LEFT", row, "LEFT", 190, 0)
     row.barFrame:SetWidth(barWidth)
 
-    if db.showDetails then
+    if view == "levels" and detailsX then
         row.details:Show()
         row.details:ClearAllPoints()
         row.details:SetPoint("LEFT", row, "LEFT", detailsX, 0)
@@ -2264,14 +2230,7 @@ local function ApplyRowLayout(row)
         row.details:Hide()
     end
 
-    if db.showStatus then
-        row.status:Show()
-        row.status:ClearAllPoints()
-        row.status:SetPoint("LEFT", row, "LEFT", statusX, 0)
-    else
-        row.status:Hide()
-    end
-
+    row.status:Hide()
     return barWidth
 end
 
@@ -2317,9 +2276,10 @@ local function CollectDayRows()
         local segments, totalSeconds = GetAccountDayBreakdown(dateKey)
 
         table.insert(rows, {
-            label = FormatHistoryDate(dateKey),
+            label = FormatHistoryDate(dateKey)
+                .. (dateKey == GetDateKey() and "  |cffffd100Today|r" or ""),
             seconds = totalSeconds,
-            status = dateKey == GetDateKey() and "Today" or "",
+            status = "",
             characterSegments = segments,
         })
     end
@@ -2364,7 +2324,7 @@ local function RenderRow(row, data, view)
         row.level:SetFontObject("GameFontHighlight")
     end
 
-    local barWidth = ApplyRowLayout(row) - 2
+    local barWidth = ApplyRowLayout(row, view)
 
     if view == "days" then
         row.accountSegment:Hide()
@@ -2377,18 +2337,6 @@ local function RenderRow(row, data, view)
 
         RenderCharacterSegments(row, data.characterSegments or {}, data.seconds or 0, barWidth)
 
-        row.details:SetText(string.format(
-            "%d character%s",
-            #(data.characterSegments or {}),
-            #(data.characterSegments or {}) == 1 and "" or "s"
-        ))
-
-        row.status:SetText(data.status)
-        if data.status == "Today" then
-            row.status:SetTextColor(1, 0.82, 0)
-        else
-            row.status:SetTextColor(1, 1, 1)
-        end
         return
     end
 
@@ -2432,16 +2380,6 @@ local function RenderRow(row, data, view)
 
         row.accountSegment:Show()
 
-        row.details:SetText(string.format(
-            "%d char%s • %d realm%s",
-            data.characterCount or 0,
-            (data.characterCount or 0) == 1 and "" or "s",
-            data.realmCount or 0,
-            (data.realmCount or 0) == 1 and "" or "s"
-        ))
-
-        row.status:SetText(data.status or "")
-        row.status:SetTextColor(1, 0.82, 0)
         return
     end
 
@@ -2491,66 +2429,47 @@ local function RenderRow(row, data, view)
     SetSegmentTooltip(row.explorationSegment, "Exploration XP", totals.exploration, mix.exploration)
     SetSegmentTooltip(row.otherSegment, "Other / Unclassified XP", totals.other, mix.other)
 
-    row.details:SetText(string.format(
-        "Quests: %d\nKills: %d\nExplored: %d\nDungeons: %d",
-        data.quests, data.kills, data.explorations or 0, data.dungeons
-    ))
+    local activity = {}
+    if (data.quests or 0) > 0 then
+        table.insert(activity, "|cff2673d9" .. data.quests .. " Quests|r")
+    end
+    if (data.kills or 0) > 0 then
+        table.insert(activity, "|cff40b333" .. data.kills .. " Kills|r")
+    end
+    if (data.explorations or 0) > 0 then
+        table.insert(activity, "|cfff2b814" .. data.explorations .. " Explored|r")
+    end
+    if (data.dungeons or 0) > 0 then
+        table.insert(activity, "|cff8c33bf" .. data.dungeons .. " Dungeons|r")
+    end
+    row.details:SetText(table.concat(activity, "  •  "))
 
-    row.status:SetText(data.status)
     if data.status == "Current" then
-        row.status:SetTextColor(1, 0.82, 0)
-    elseif data.status == "Complete" then
-        row.status:SetTextColor(0.35, 1, 0.35)
-    else
-        row.status:SetTextColor(1, 1, 1)
+        row.level:SetText("|cffffd100" .. tostring(data.label) .. "|r")
     end
 end
 
 local function ApplyHeaderLayout()
-    if not historyFrame then
-        return
-    end
+    if not historyFrame then return end
 
-    local db = EnsureDatabase()
-    local barWidth, detailsX, statusX = GetRowLayout()
+    local barWidth, detailsX = GetRowLayout(currentView)
 
     historyFrame.barHeader:ClearAllPoints()
-    historyFrame.barHeader:SetPoint(
-        "TOPLEFT",
-        historyFrame,
-        "TOPLEFT",
-        222,
-        -170
-    )
+    historyFrame.barHeader:SetPoint("TOPLEFT", historyFrame, "TOPLEFT", 208, -145)
     historyFrame.barHeader:SetWidth(barWidth)
 
-    if db.showDetails then
+    if currentView == "levels" and detailsX then
         historyFrame.detailsHeader:Show()
         historyFrame.detailsHeader:ClearAllPoints()
         historyFrame.detailsHeader:SetPoint(
-            "TOPLEFT",
-            historyFrame,
-            "TOPLEFT",
-            18 + detailsX,
-            -170
+            "TOPLEFT", historyFrame, "TOPLEFT", 18 + detailsX, -145
         )
+        historyFrame.detailsHeader:SetText("Activity")
     else
         historyFrame.detailsHeader:Hide()
     end
 
-    if db.showStatus then
-        historyFrame.statusHeader:Show()
-        historyFrame.statusHeader:ClearAllPoints()
-        historyFrame.statusHeader:SetPoint(
-            "TOPLEFT",
-            historyFrame,
-            "TOPLEFT",
-            18 + statusX,
-            -170
-        )
-    else
-        historyFrame.statusHeader:Hide()
-    end
+    historyFrame.statusHeader:Hide()
 end
 
 local function RefreshHistoryUI()
@@ -2574,7 +2493,7 @@ local function RefreshHistoryUI()
     local today = EnsureDay()
 
     historyFrame.summaryLevel:SetText(
-        "|cffffd100Level|r  |cffffffff"
+        "|cffffd100This level|r  |cffffffff"
         .. FormatDuration(levelData.seconds)
         .. "|r"
     )
@@ -2622,13 +2541,13 @@ local function RefreshHistoryUI()
     if historyFrame.dayLegendHint then
         if currentView == "days" then
             historyFrame.dayLegendHint:SetText(
-                "Realm days: class-colored character segments • hover for details"
+                "Class-colored by character • hover for details"
             )
             historyFrame.dayLegendHint:Show()
         elseif currentView == "account" then
             historyFrame.dayLegendHint:SetText(
                 string.format(
-                    "Account: %d character%s across %d realm%s • hover a class for characters",
+                    "%d character%s • %d realm%s • hover a class for details",
                     accountCharacters,
                     accountCharacters == 1 and "" or "s",
                     accountRealms,
@@ -2647,21 +2566,21 @@ local function RefreshHistoryUI()
 
     if currentView == "levels" then
         historyFrame.windowTitle:SetText("Played Plus")
-        historyFrame.sectionTitle:SetText("Level History")
+        historyFrame.sectionTitle:SetText("")
         historyFrame.leftHeader:SetText("Level")
         historyFrame.barHeader:SetText("XP progress by source")
         dataRows = CollectLevelRows()
     elseif currentView == "days" then
         historyFrame.windowTitle:SetText("Played Plus")
-        historyFrame.sectionTitle:SetText("Realm Daily History")
+        historyFrame.sectionTitle:SetText("")
         historyFrame.leftHeader:SetText("Date")
         historyFrame.barHeader:SetText("Played time by character")
         dataRows = CollectDayRows()
     else
         historyFrame.windowTitle:SetText("Played Plus")
-        historyFrame.sectionTitle:SetText("Account /played")
+        historyFrame.sectionTitle:SetText("")
         historyFrame.leftHeader:SetText("Class")
-        historyFrame.barHeader:SetText("Share of lifetime account /played")
+        historyFrame.barHeader:SetText("Share of account")
         dataRows = CollectAccountRows()
     end
 
@@ -2709,7 +2628,7 @@ local function CreateHistoryUI()
         end
     end
 
-    frame:SetSize(1000, 600)
+    frame:SetSize(900, 500)
     frame:SetPoint("CENTER")
     frame:SetFrameStrata("DIALOG")
     frame:SetClampedToScreen(true)
@@ -2762,7 +2681,7 @@ local function CreateHistoryUI()
     -- native and automatically matches the character being documented.
     frame.portraitFrame = CreateFrame("Frame", nil, frame)
     frame.portraitFrame:SetSize(68, 68)
-    frame.portraitFrame:SetPoint("TOPLEFT", frame, "TOPLEFT", 24, -42)
+    frame.portraitFrame:SetPoint("TOPLEFT", frame, "TOPLEFT", 24, -40)
 
     -- Keep the live portrait at the existing readable size. Avoid scaling the
     -- low-resolution Minimap tracking artwork; it becomes visibly pixelated.
@@ -2820,8 +2739,8 @@ local function CreateHistoryUI()
         "TOPLEFT",
         frame,
         "TOPLEFT",
-        102,
-        -52,
+        100,
+        -48,
         "LEFT"
     )
 
@@ -2831,8 +2750,8 @@ local function CreateHistoryUI()
         "TOPLEFT",
         frame,
         "TOPLEFT",
-        103,
-        -76,
+        101,
+        -70,
         "LEFT"
     )
     frame.characterMeta:SetTextColor(0.82, 0.72, 0.52, 1)
@@ -2854,8 +2773,8 @@ local function CreateHistoryUI()
         "TOPLEFT",
         frame,
         "TOPLEFT",
-        28,
-        -139,
+        30,
+        -111,
         "LEFT"
     )
 
@@ -2865,8 +2784,8 @@ local function CreateHistoryUI()
         "TOPLEFT",
         frame,
         "TOPLEFT",
-        390,
-        -139,
+        190,
+        -111,
         "LEFT"
     )
 
@@ -2876,8 +2795,8 @@ local function CreateHistoryUI()
         "TOPLEFT",
         frame,
         "TOPLEFT",
-        700,
-        -139,
+        325,
+        -111,
         "LEFT"
     )
 
@@ -2892,7 +2811,7 @@ local function CreateHistoryUI()
         frame,
         "TOPRIGHT",
         -325,
-        -106
+        -101
     )
     frame.levelsButton:SetScript("OnClick", function()
         currentView = "levels"
@@ -2946,7 +2865,7 @@ local function CreateHistoryUI()
         frame,
         "TOPRIGHT",
         -24,
-        -48
+        -44
     )
     syncButton:SetScript("OnClick", function()
         RequestPlayedSync()
@@ -2959,14 +2878,14 @@ local function CreateHistoryUI()
         frame,
         "TOPLEFT",
         24,
-        -161
+        -151
     )
     separator:SetPoint(
         "TOPRIGHT",
         frame,
         "TOPRIGHT",
         -24,
-        -201
+        -151
     )
     separator:SetHeight(1)
     separator:SetTexture("Interface\\Buttons\\WHITE8X8")
@@ -2979,7 +2898,7 @@ local function CreateHistoryUI()
         frame,
         "TOPLEFT",
         28,
-        -153,
+        -145,
         "LEFT"
     )
 
@@ -2989,8 +2908,8 @@ local function CreateHistoryUI()
         "TOPLEFT",
         frame,
         "TOPLEFT",
-        112,
-        -182,
+        106,
+        -145,
         "LEFT"
     )
     timeHeader:SetText("Time played")
@@ -3001,8 +2920,8 @@ local function CreateHistoryUI()
         "TOPLEFT",
         frame,
         "TOPLEFT",
-        222,
-        -153,
+        208,
+        -145,
         "CENTER"
     )
 
@@ -3012,8 +2931,8 @@ local function CreateHistoryUI()
         "TOPLEFT",
         frame,
         "TOPLEFT",
-        720,
-        -182,
+        718,
+        -145,
         "CENTER"
     )
     frame.detailsHeader:SetWidth(160)
@@ -3025,8 +2944,8 @@ local function CreateHistoryUI()
         "TOPLEFT",
         frame,
         "TOPLEFT",
-        892,
-        -182,
+        820,
+        -145,
         "CENTER"
     )
     frame.statusHeader:SetWidth(65)
@@ -3090,10 +3009,10 @@ local function CreateHistoryUI()
     end
 
     CompactLegend(28, XP_COLORS.mob, "Kills · mob XP")
-    CompactLegend(195, XP_COLORS.quest, "Quests · turn-ins")
-    CompactLegend(375, XP_COLORS.dungeon, "Dungeon · kill XP")
-    CompactLegend(570, XP_COLORS.exploration, "Exploration XP")
-    CompactLegend(750, XP_COLORS.other, "Other · unclassified")
+    CompactLegend(180, XP_COLORS.quest, "Quests · turn-ins")
+    CompactLegend(345, XP_COLORS.dungeon, "Dungeon · kill XP")
+    CompactLegend(520, XP_COLORS.exploration, "Exploration XP")
+    CompactLegend(680, XP_COLORS.other, "Other · unclassified")
 
     frame.dayLegendHint = frame:CreateFontString(
         nil,
