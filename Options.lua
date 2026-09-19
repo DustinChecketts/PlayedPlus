@@ -14,7 +14,6 @@ local Compat = PP.Compat
 local PANEL_NAME = "Played Plus"
 
 local DEFAULTS = {
-    windowOpacity = 0.70,
     showLabels = true,
     showTooltips = true,
     showDetails = true,
@@ -47,10 +46,6 @@ local function EnsureDB()
 end
 
 local function RefreshTracker()
-    if PlayedPlus_ApplyWindowOpacity then
-        PlayedPlus_ApplyWindowOpacity()
-    end
-
     if PlayedPlus_RefreshTracker then
         PlayedPlus_RefreshTracker()
     end
@@ -67,49 +62,6 @@ subtitle:SetText("Display options for level, daily, and account playtime history
 local displayHeader = panel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
 displayHeader:SetPoint("TOPLEFT", 20, -82)
 displayHeader:SetText("Tracker Window")
-
-local opacitySlider = CreateFrame(
-    "Slider",
-    "PlayedPlusOptionsOpacitySlider",
-    panel,
-    "OptionsSliderTemplate"
-)
-opacitySlider:SetPoint("TOPLEFT", 24, -120)
-opacitySlider:SetMinMaxValues(20, 100)
-opacitySlider:SetValueStep(5)
-
-if opacitySlider.SetObeyStepOnDrag then
-    opacitySlider:SetObeyStepOnDrag(true)
-end
-
-opacitySlider:SetWidth(240)
-
-opacitySlider.Text:SetText("Window Opacity")
-opacitySlider.Low:SetText("20%")
-opacitySlider.High:SetText("100%")
-
-opacitySlider.valueText = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-opacitySlider.valueText:SetPoint("LEFT", opacitySlider, "RIGHT", 12, 0)
-
-opacitySlider:SetScript("OnValueChanged", function(self, value)
-    local rounded = math.floor((value / 5) + 0.5) * 5
-    local db = EnsureDB()
-
-    db.windowOpacity = rounded / 100
-    self.valueText:SetText(string.format("%d%%", rounded))
-
-    RefreshTracker()
-end)
-
-opacitySlider.Refresh = function()
-    local db = EnsureDB()
-    local value = math.floor(((db.windowOpacity or 0.70) * 100) + 0.5)
-
-    opacitySlider:SetValue(value)
-    opacitySlider.valueText:SetText(string.format("%d%%", value))
-end
-
-table.insert(controls, opacitySlider)
 
 local function CreateOptionCheckbox(name, label, key, x, y)
     -- UICheckButtonTemplate is available on WoW Forever and avoids relying on
@@ -135,21 +87,21 @@ local function CreateOptionCheckbox(name, label, key, x, y)
     return check
 end
 
-CreateOptionCheckbox("PlayedPlusShowLabels", "Show Labels", "showLabels", 24, -175)
-CreateOptionCheckbox("PlayedPlusShowTooltips", "Show Tooltips", "showTooltips", 220, -175)
-CreateOptionCheckbox("PlayedPlusShowDetails", "Show Details Column", "showDetails", 24, -210)
-CreateOptionCheckbox("PlayedPlusShowStatus", "Show Status Column", "showStatus", 220, -210)
-CreateOptionCheckbox("PlayedPlusDebugXPLog", "Debug XP Logging to Chat", "debugXPLog", 24, -245)
+CreateOptionCheckbox("PlayedPlusShowLabels", "Show Labels", "showLabels", 24, -120)
+CreateOptionCheckbox("PlayedPlusShowTooltips", "Show Tooltips", "showTooltips", 220, -120)
+CreateOptionCheckbox("PlayedPlusShowDetails", "Show Details Column", "showDetails", 24, -155)
+CreateOptionCheckbox("PlayedPlusShowStatus", "Show Status Column", "showStatus", 220, -155)
+CreateOptionCheckbox("PlayedPlusDebugXPLog", "Debug XP Logging to Chat", "debugXPLog", 24, -190)
 
 local debugHelp = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-debugHelp:SetPoint("TOPLEFT", 48, -271)
+debugHelp:SetPoint("TOPLEFT", 48, -216)
 debugHelp:SetWidth(430)
 debugHelp:SetJustifyH("LEFT")
 debugHelp:SetText("Prints one finalized chat line per XP transaction after classification settles.")
 
 local openButton = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
 openButton:SetSize(130, 24)
-openButton:SetPoint("TOPLEFT", 24, -315)
+openButton:SetPoint("TOPLEFT", 24, -260)
 openButton:SetText("Open Tracker")
 openButton:SetScript("OnClick", function()
     if PlayedPlus_OpenTracker then
