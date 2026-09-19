@@ -72,6 +72,7 @@ local XP_COLORS = {
     mob = { 0.25, 0.70, 0.20, 0.95 },
     quest = { 0.15, 0.45, 0.85, 0.95 },
     dungeon = { 0.55, 0.20, 0.75, 0.95 },
+    exploration = { 0.90, 0.58, 0.12, 0.95 },
     other = { 0.50, 0.50, 0.50, 0.95 },
 }
 
@@ -1327,6 +1328,7 @@ local function AggregateLevelXP(levelData)
         mob = 0,
         quest = 0,
         dungeon = 0,
+        exploration = 0,
         other = 0,
         total = 0,
     }
@@ -1334,8 +1336,9 @@ local function AggregateLevelXP(levelData)
     for _, event in ipairs(levelData.ledger or {}) do
         local amount = tonumber(event.amount) or 0
         local source = NormalizeSource(event.source)
+        local bucket = event.subtype == "exploration" and "exploration" or source
 
-        totals[source] = totals[source] + amount
+        totals[bucket] = totals[bucket] + amount
         totals.total = totals.total + amount
     end
 
@@ -1544,6 +1547,7 @@ local function GetLevelBreakdown(levelData, isCurrent)
         mob = 0,
         quest = 0,
         dungeon = 0,
+        exploration = 0,
         other = 0,
     }
 
@@ -1551,6 +1555,7 @@ local function GetLevelBreakdown(levelData, isCurrent)
         mix.mob = totals.mob / totals.total * 100
         mix.quest = totals.quest / totals.total * 100
         mix.dungeon = totals.dungeon / totals.total * 100
+        mix.exploration = totals.exploration / totals.total * 100
         mix.other = totals.other / totals.total * 100
     end
 
@@ -1645,7 +1650,7 @@ local function ShowCurrentLevel()
     local breakdown = GetLevelBreakdown(levelData, true)
 
     Print(string.format(
-        "Level %d: %s | Q:%d K:%d D:%d | XP K:%d%% Q:%d%% D:%d%% O:%d%%",
+        "Level %d: %s | Q:%d K:%d D:%d | XP K:%d%% Q:%d%% D:%d%% E:%d%% O:%d%%",
         level,
         FormatDuration(levelData.seconds),
         levelData.quests,
@@ -1654,6 +1659,7 @@ local function ShowCurrentLevel()
         math.floor(breakdown.mix.mob + 0.5),
         math.floor(breakdown.mix.quest + 0.5),
         math.floor(breakdown.mix.dungeon + 0.5),
+        math.floor(breakdown.mix.exploration + 0.5),
         math.floor(breakdown.mix.other + 0.5)
     ))
 end
@@ -2148,6 +2154,7 @@ local function CreateHistoryRow(parent, index)
     row.mobSegment = CreateSegment(row.barFrame, XP_COLORS.mob)
     row.questSegment = CreateSegment(row.barFrame, XP_COLORS.quest)
     row.dungeonSegment = CreateSegment(row.barFrame, XP_COLORS.dungeon)
+    row.explorationSegment = CreateSegment(row.barFrame, XP_COLORS.exploration)
     row.otherSegment = CreateSegment(row.barFrame, XP_COLORS.other)
 
     row.progress = row.barFrame:CreateFontString(
@@ -2352,6 +2359,7 @@ local function RenderRow(row, data, view)
         row.mobSegment:Hide()
         row.questSegment:Hide()
         row.dungeonSegment:Hide()
+        row.explorationSegment:Hide()
         row.otherSegment:Hide()
         row.progress:Hide()
 
@@ -2378,6 +2386,7 @@ local function RenderRow(row, data, view)
         row.mobSegment:Hide()
         row.questSegment:Hide()
         row.dungeonSegment:Hide()
+        row.explorationSegment:Hide()
         row.otherSegment:Hide()
         row.progress:Hide()
 
@@ -2436,6 +2445,7 @@ local function RenderRow(row, data, view)
     local mobWidth = progressWidth * mix.mob / 100
     local questWidth = progressWidth * mix.quest / 100
     local dungeonWidth = progressWidth * mix.dungeon / 100
+    local explorationWidth = progressWidth * mix.exploration / 100
     local otherWidth = progressWidth * mix.other / 100
 
     local offset = 0
@@ -2445,6 +2455,8 @@ local function RenderRow(row, data, view)
     offset = offset + questWidth
     SetSegment(row.dungeonSegment, offset, dungeonWidth, mix.dungeon)
     offset = offset + dungeonWidth
+    SetSegment(row.explorationSegment, offset, explorationWidth, mix.exploration)
+    offset = offset + explorationWidth
     SetSegment(row.otherSegment, offset, otherWidth, mix.other)
 
     row.progress:ClearAllPoints()
@@ -2464,7 +2476,8 @@ local function RenderRow(row, data, view)
     SetSegmentTooltip(row.mobSegment, "Kills XP", totals.mob, mix.mob)
     SetSegmentTooltip(row.questSegment, "Quest XP", totals.quest, mix.quest)
     SetSegmentTooltip(row.dungeonSegment, "Dungeon XP", totals.dungeon, mix.dungeon)
-    SetSegmentTooltip(row.otherSegment, "Other XP (exploration / unclassified)", totals.other, mix.other)
+    SetSegmentTooltip(row.explorationSegment, "Exploration XP", totals.exploration, mix.exploration)
+    SetSegmentTooltip(row.otherSegment, "Other / Unclassified XP", totals.other, mix.other)
 
     row.details:SetText(string.format(
         "Quests: %d\nKills: %d\nDungeons: %d",
