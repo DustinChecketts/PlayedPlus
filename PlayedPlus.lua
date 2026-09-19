@@ -1795,6 +1795,19 @@ local function ApplyWindowOpacity()
         0.07,
         math.min(1, opacity + 0.03)
     )
+
+    -- BasicFrameTemplateWithInset brings its own opaque background/chrome.
+    -- Fade those artwork regions with the user's setting without fading text,
+    -- bars, buttons, or other child controls.
+    if historyFrame.Bg then
+        historyFrame.Bg:SetAlpha(opacity)
+    end
+    if historyFrame.Inset then
+        historyFrame.Inset:SetAlpha(opacity)
+    end
+    if historyFrame.NineSlice then
+        historyFrame.NineSlice:SetAlpha(math.max(0.55, opacity))
+    end
 end
 
 local function CreateSegment(parent, color)
@@ -2113,19 +2126,24 @@ local function CreateHistoryRow(parent, index)
     row.barBackground = row.barFrame:CreateTexture(nil, "BACKGROUND")
     row.barBackground:SetAllPoints()
     row.barBackground:SetTexture("Interface\\Buttons\\WHITE8X8")
-    row.barBackground:SetVertexColor(0.035, 0.025, 0.015, 0.96)
+    row.barBackground:SetVertexColor(0.055, 0.040, 0.022, 0.98)
 
-    row.barBorder = row.barFrame:CreateTexture(nil, "BORDER")
-    row.barBorder:SetPoint("TOPLEFT", row.barFrame, "TOPLEFT", -1, 1)
-    row.barBorder:SetPoint("BOTTOMRIGHT", row.barFrame, "BOTTOMRIGHT", 1, -1)
-    row.barBorder:SetTexture("Interface\\Buttons\\WHITE8X8")
-    row.barBorder:SetVertexColor(0.48, 0.36, 0.20, 0.85)
+    row.barEdges = {}
+    local function AddBarEdge(pointA, pointB, width, height)
+        local edge = row.barFrame:CreateTexture(nil, "OVERLAY", nil, 7)
+        edge:SetPoint(pointA)
+        edge:SetPoint(pointB)
+        if width then edge:SetWidth(width) end
+        if height then edge:SetHeight(height) end
+        edge:SetTexture("Interface\\Buttons\\WHITE8X8")
+        edge:SetVertexColor(0.58, 0.43, 0.23, 0.95)
+        table.insert(row.barEdges, edge)
+    end
 
-    row.barInner = row.barFrame:CreateTexture(nil, "BACKGROUND", nil, 1)
-    row.barInner:SetPoint("TOPLEFT", row.barFrame, "TOPLEFT", 1, -1)
-    row.barInner:SetPoint("BOTTOMRIGHT", row.barFrame, "BOTTOMRIGHT", -1, 1)
-    row.barInner:SetTexture("Interface\\Buttons\\WHITE8X8")
-    row.barInner:SetVertexColor(0.08, 0.055, 0.025, 0.95)
+    AddBarEdge("TOPLEFT", "TOPRIGHT", nil, 1)
+    AddBarEdge("BOTTOMLEFT", "BOTTOMRIGHT", nil, 1)
+    AddBarEdge("TOPLEFT", "BOTTOMLEFT", 1, nil)
+    AddBarEdge("TOPRIGHT", "BOTTOMRIGHT", 1, nil)
 
     row.mobSegment = CreateSegment(row.barFrame, XP_COLORS.mob)
     row.questSegment = CreateSegment(row.barFrame, XP_COLORS.quest)
@@ -2718,11 +2736,11 @@ local function CreateHistoryUI()
     -- Character-sheet style identity block. The live unit portrait keeps this
     -- native and automatically matches the character being documented.
     frame.portraitFrame = CreateFrame("Frame", nil, frame)
-    frame.portraitFrame:SetSize(58, 58)
-    frame.portraitFrame:SetPoint("TOPLEFT", frame, "TOPLEFT", 22, -42)
+    frame.portraitFrame:SetSize(72, 72)
+    frame.portraitFrame:SetPoint("TOPLEFT", frame, "TOPLEFT", 20, -39)
 
     frame.portrait = frame.portraitFrame:CreateTexture(nil, "ARTWORK")
-    frame.portrait:SetSize(48, 48)
+    frame.portrait:SetSize(60, 60)
     frame.portrait:SetPoint("CENTER")
     frame.portrait:SetTexCoord(0.07, 0.93, 0.07, 0.93)
 
@@ -2737,7 +2755,7 @@ local function CreateHistoryUI()
         "TOPLEFT",
         frame,
         "TOPLEFT",
-        88,
+        101,
         -48,
         "LEFT"
     )
@@ -2748,8 +2766,8 @@ local function CreateHistoryUI()
         "TOPLEFT",
         frame,
         "TOPLEFT",
-        89,
-        -72,
+        102,
+        -74,
         "LEFT"
     )
     frame.characterMeta:SetTextColor(0.82, 0.72, 0.52, 1)
