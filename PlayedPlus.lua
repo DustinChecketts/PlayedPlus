@@ -611,6 +611,14 @@ local function EnsureCurrentLevelBaseline()
 
     local db = EnsureDatabase()
     local level = UnitLevel("player") or db.currentLevel or 1
+
+    if historyFrame.characterLine then
+        historyFrame.characterLine:SetText(
+            tostring(UnitName("player") or "Unknown")
+            .. "  •  "
+            .. tostring(GetRealmKey())
+        )
+    end
     local levelData = EnsureLevel(level)
     local currentXP = UnitXP("player") or 0
     local requiredXP = UnitXPMax("player") or 0
@@ -1719,60 +1727,12 @@ local function CreateText(
 end
 
 local function CreateFlatButton(parent, label, width, height)
-    local button = CreateFrame("Button", nil, parent)
+    -- Use Blizzard's own panel button art so the tracker feels like a native
+    -- game window on every client that exposes the standard template.
+    local button = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
     button:SetSize(width, height)
-
-    button.bg = button:CreateTexture(nil, "BACKGROUND")
-    button.bg:SetAllPoints()
-    button.bg:SetTexture("Interface\\Buttons\\WHITE8X8")
-    button.bg:SetVertexColor(0.12, 0.12, 0.12, 0.95)
-
-    local borders = {}
-
-    borders[1] = button:CreateTexture(nil, "BORDER")
-    borders[1]:SetPoint("TOPLEFT")
-    borders[1]:SetPoint("TOPRIGHT")
-    borders[1]:SetHeight(1)
-
-    borders[2] = button:CreateTexture(nil, "BORDER")
-    borders[2]:SetPoint("BOTTOMLEFT")
-    borders[2]:SetPoint("BOTTOMRIGHT")
-    borders[2]:SetHeight(1)
-
-    borders[3] = button:CreateTexture(nil, "BORDER")
-    borders[3]:SetPoint("TOPLEFT")
-    borders[3]:SetPoint("BOTTOMLEFT")
-    borders[3]:SetWidth(1)
-
-    borders[4] = button:CreateTexture(nil, "BORDER")
-    borders[4]:SetPoint("TOPRIGHT")
-    borders[4]:SetPoint("BOTTOMRIGHT")
-    borders[4]:SetWidth(1)
-
-    for i = 1, 4 do
-        borders[i]:SetTexture("Interface\\Buttons\\WHITE8X8")
-        borders[i]:SetVertexColor(0.45, 0.45, 0.45, 1)
-    end
-
-    button.label = button:CreateFontString(
-        nil,
-        "OVERLAY",
-        "GameFontNormal"
-    )
-    button.label:SetPoint("CENTER")
-    button.label:SetText(label)
-
-    button:SetScript("OnEnter", function(self)
-        self.bg:SetVertexColor(0.22, 0.22, 0.22, 0.95)
-    end)
-
-    button:SetScript("OnLeave", function(self)
-        if self.selected then
-            self.bg:SetVertexColor(0.25, 0.45, 0.70, 0.95)
-        else
-            self.bg:SetVertexColor(0.12, 0.12, 0.12, 0.95)
-        end
-    end)
+    button:SetText(label)
+    button.label = button:GetFontString()
 
     return button
 end
@@ -1781,11 +1741,15 @@ local function SetButtonSelected(button, selected)
     button.selected = selected
 
     if selected then
-        button.bg:SetVertexColor(0.25, 0.45, 0.70, 0.95)
-        button.label:SetTextColor(1, 1, 1)
+        button:LockHighlight()
+        if button.label then
+            button.label:SetTextColor(1, 1, 1)
+        end
     else
-        button.bg:SetVertexColor(0.12, 0.12, 0.12, 0.95)
-        button.label:SetTextColor(1, 0.82, 0)
+        button:UnlockHighlight()
+        if button.label then
+            button.label:SetTextColor(1, 0.82, 0)
+        end
     end
 end
 
@@ -1798,9 +1762,9 @@ local function ApplyWindowOpacity()
     local opacity = Clamp(db.windowOpacity or 0.70, 0.20, 1.00)
 
     historyFrame.background:SetVertexColor(
-        0.025,
-        0.025,
-        0.025,
+        0.055,
+        0.038,
+        0.018,
         opacity
     )
 
@@ -2087,7 +2051,7 @@ local function CreateHistoryRow(parent, index)
         parent,
         "TOPLEFT",
         18,
-        -146 - ((index - 1) * 36)
+        -160 - ((index - 1) * 36)
     )
 
     if index % 2 == 0 then
@@ -2128,7 +2092,19 @@ local function CreateHistoryRow(parent, index)
     row.barBackground = row.barFrame:CreateTexture(nil, "BACKGROUND")
     row.barBackground:SetAllPoints()
     row.barBackground:SetTexture("Interface\\Buttons\\WHITE8X8")
-    row.barBackground:SetVertexColor(0.07, 0.07, 0.07, 0.98)
+    row.barBackground:SetVertexColor(0.035, 0.025, 0.015, 0.96)
+
+    row.barBorder = row.barFrame:CreateTexture(nil, "BORDER")
+    row.barBorder:SetPoint("TOPLEFT", row.barFrame, "TOPLEFT", -1, 1)
+    row.barBorder:SetPoint("BOTTOMRIGHT", row.barFrame, "BOTTOMRIGHT", 1, -1)
+    row.barBorder:SetTexture("Interface\\Buttons\\WHITE8X8")
+    row.barBorder:SetVertexColor(0.48, 0.36, 0.20, 0.85)
+
+    row.barInner = row.barFrame:CreateTexture(nil, "BACKGROUND", nil, 1)
+    row.barInner:SetPoint("TOPLEFT", row.barFrame, "TOPLEFT", 1, -1)
+    row.barInner:SetPoint("BOTTOMRIGHT", row.barFrame, "BOTTOMRIGHT", -1, 1)
+    row.barInner:SetTexture("Interface\\Buttons\\WHITE8X8")
+    row.barInner:SetVertexColor(0.08, 0.055, 0.025, 0.95)
 
     row.mobSegment = CreateSegment(row.barFrame, XP_COLORS.mob)
     row.questSegment = CreateSegment(row.barFrame, XP_COLORS.quest)
@@ -2492,7 +2468,7 @@ local function ApplyHeaderLayout()
             historyFrame,
             "TOPLEFT",
             18 + detailsX,
-            -130
+            -144
         )
     else
         historyFrame.detailsHeader:Hide()
@@ -2506,7 +2482,7 @@ local function ApplyHeaderLayout()
             historyFrame,
             "TOPLEFT",
             18 + statusX,
-            -130
+            -144
         )
     else
         historyFrame.statusHeader:Hide()
@@ -2522,6 +2498,14 @@ local function RefreshHistoryUI()
 
     local db = EnsureDatabase()
     local level = UnitLevel("player") or db.currentLevel or 1
+
+    if historyFrame.characterLine then
+        historyFrame.characterLine:SetText(
+            tostring(UnitName("player") or "Unknown")
+            .. "  •  "
+            .. tostring(GetRealmKey())
+        )
+    end
     local levelData = EnsureLevel(level)
     local today = EnsureDay()
 
@@ -2637,10 +2621,13 @@ local function CreateHistoryUI()
         return historyFrame
     end
 
+    -- BasicFrameTemplateWithInset supplies Blizzard's standard portrait-less
+    -- panel chrome, NineSlice border, title background, and close button.
     local frame = CreateFrame(
         "Frame",
         "PlayedPlusHistoryFrame",
-        UIParent
+        UIParent,
+        "BasicFrameTemplateWithInset"
     )
 
     if UISpecialFrames then
@@ -2678,62 +2665,49 @@ local function CreateHistoryUI()
         self:StopMovingOrSizing()
     end)
 
-    frame.background = frame:CreateTexture(nil, "BACKGROUND")
-    frame.background:SetAllPoints()
+    -- A translucent parchment-dark content wash sits inside Blizzard's native
+    -- frame chrome. Opacity remains user-configurable without fading text.
+    frame.background = frame:CreateTexture(nil, "BACKGROUND", nil, 1)
+    frame.background:SetPoint("TOPLEFT", frame, "TOPLEFT", 12, -32)
+    frame.background:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -12, 12)
     frame.background:SetTexture("Interface\\Buttons\\WHITE8X8")
 
+    -- Keep this alias for the existing opacity routine. The native template
+    -- owns the visible title bar, so this texture itself stays invisible.
     frame.titleBar = frame:CreateTexture(nil, "BACKGROUND")
-    frame.titleBar:SetPoint("TOPLEFT", 1, -1)
-    frame.titleBar:SetPoint("TOPRIGHT", -1, -1)
-    frame.titleBar:SetHeight(38)
-    frame.titleBar:SetTexture("Interface\\Buttons\\WHITE8X8")
+    frame.titleBar:SetSize(1, 1)
+    frame.titleBar:SetAlpha(0)
 
-    local borders = {}
-
-    borders[1] = frame:CreateTexture(nil, "BORDER")
-    borders[1]:SetPoint("TOPLEFT")
-    borders[1]:SetPoint("TOPRIGHT")
-    borders[1]:SetHeight(1)
-
-    borders[2] = frame:CreateTexture(nil, "BORDER")
-    borders[2]:SetPoint("BOTTOMLEFT")
-    borders[2]:SetPoint("BOTTOMRIGHT")
-    borders[2]:SetHeight(1)
-
-    borders[3] = frame:CreateTexture(nil, "BORDER")
-    borders[3]:SetPoint("TOPLEFT")
-    borders[3]:SetPoint("BOTTOMLEFT")
-    borders[3]:SetWidth(1)
-
-    borders[4] = frame:CreateTexture(nil, "BORDER")
-    borders[4]:SetPoint("TOPRIGHT")
-    borders[4]:SetPoint("BOTTOMRIGHT")
-    borders[4]:SetWidth(1)
-
-    for i = 1, 4 do
-        borders[i]:SetTexture("Interface\\Buttons\\WHITE8X8")
-        borders[i]:SetVertexColor(0.45, 0.45, 0.45, 1)
-    end
-
-    frame.windowTitle = CreateText(
+    frame.windowTitle = frame.TitleText or CreateText(
         frame,
         "GameFontNormalLarge",
-        "TOPLEFT",
+        "TOP",
         frame,
-        "TOPLEFT",
-        18,
-        -11,
-        "LEFT"
+        "TOP",
+        0,
+        -8,
+        "CENTER"
     )
 
-    local closeButton = CreateFlatButton(frame, "X", 26, 26)
-    closeButton:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -8, -6)
-    closeButton.label:SetFontObject("GameFontNormalLarge")
-    closeButton.label:ClearAllPoints()
-    closeButton.label:SetPoint("CENTER", closeButton, "CENTER", 0, -1)
-    closeButton:SetScript("OnClick", function()
-        frame:Hide()
-    end)
+    -- BasicFrameTemplateWithInset already supplies the Blizzard close button.
+    local closeButton = frame.CloseButton
+    if closeButton then
+        closeButton:SetScript("OnClick", function()
+            frame:Hide()
+        end)
+    end
+
+    frame.characterLine = CreateText(
+        frame,
+        "GameFontHighlightSmall",
+        "TOP",
+        frame,
+        "TOP",
+        0,
+        -43,
+        "CENTER"
+    )
+    frame.characterLine:SetTextColor(0.82, 0.72, 0.52, 1)
 
     frame.summaryLevel = CreateText(
         frame,
@@ -2742,7 +2716,7 @@ local function CreateHistoryUI()
         frame,
         "TOPLEFT",
         24,
-        -54,
+        -68,
         "LEFT"
     )
 
@@ -2753,7 +2727,7 @@ local function CreateHistoryUI()
         frame,
         "TOPLEFT",
         370,
-        -54,
+        -68,
         "LEFT"
     )
 
@@ -2764,7 +2738,7 @@ local function CreateHistoryUI()
         frame,
         "TOPLEFT",
         680,
-        -54,
+        -68,
         "LEFT"
     )
 
@@ -2779,7 +2753,7 @@ local function CreateHistoryUI()
         frame,
         "TOPLEFT",
         24,
-        -84
+        -98
     )
     frame.levelsButton:SetScript("OnClick", function()
         currentView = "levels"
@@ -2833,7 +2807,7 @@ local function CreateHistoryUI()
         frame,
         "TOPRIGHT",
         -24,
-        -84
+        -98
     )
     syncButton:SetScript("OnClick", function()
         RequestPlayedSync()
@@ -2846,14 +2820,14 @@ local function CreateHistoryUI()
         frame,
         "TOPLEFT",
         24,
-        -121
+        -135
     )
     separator:SetPoint(
         "TOPRIGHT",
         frame,
         "TOPRIGHT",
         -24,
-        -121
+        -135
     )
     separator:SetHeight(1)
     separator:SetTexture("Interface\\Buttons\\WHITE8X8")
@@ -2866,7 +2840,7 @@ local function CreateHistoryUI()
         frame,
         "TOPLEFT",
         28,
-        -130,
+        -144,
         "LEFT"
     )
 
@@ -2877,7 +2851,7 @@ local function CreateHistoryUI()
         frame,
         "TOPLEFT",
         112,
-        -130,
+        -144,
         "LEFT"
     )
     timeHeader:SetText("Time played")
@@ -2889,7 +2863,7 @@ local function CreateHistoryUI()
         frame,
         "TOPLEFT",
         222,
-        -130,
+        -144,
         "CENTER"
     )
 
@@ -2900,7 +2874,7 @@ local function CreateHistoryUI()
         frame,
         "TOPLEFT",
         720,
-        -130,
+        -144,
         "CENTER"
     )
     frame.detailsHeader:SetWidth(160)
@@ -2913,7 +2887,7 @@ local function CreateHistoryUI()
         frame,
         "TOPLEFT",
         892,
-        -130,
+        -144,
         "CENTER"
     )
     frame.statusHeader:SetWidth(65)
