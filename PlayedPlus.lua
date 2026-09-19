@@ -2736,16 +2736,20 @@ local function CreateHistoryUI()
     -- Character-sheet style identity block. The live unit portrait keeps this
     -- native and automatically matches the character being documented.
     frame.portraitFrame = CreateFrame("Frame", nil, frame)
-    frame.portraitFrame:SetSize(72, 72)
-    frame.portraitFrame:SetPoint("TOPLEFT", frame, "TOPLEFT", 20, -39)
+    frame.portraitFrame:SetSize(88, 88)
+    frame.portraitFrame:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, -34)
 
+    -- Keep the actual face comfortably inside the ornamental ring. The
+    -- Minimap tracking texture has a relatively thick inner lip, so using the
+    -- same size for portrait and border makes the ring visually cover the face.
     frame.portrait = frame.portraitFrame:CreateTexture(nil, "ARTWORK")
-    frame.portrait:SetSize(60, 60)
-    frame.portrait:SetPoint("CENTER")
-    frame.portrait:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+    frame.portrait:SetSize(62, 62)
+    frame.portrait:SetPoint("CENTER", frame.portraitFrame, "CENTER", -1, 1)
+    frame.portrait:SetTexCoord(0.09, 0.91, 0.09, 0.91)
 
     frame.portraitBorder = frame.portraitFrame:CreateTexture(nil, "OVERLAY")
-    frame.portraitBorder:SetAllPoints()
+    frame.portraitBorder:SetSize(88, 88)
+    frame.portraitBorder:SetPoint("CENTER")
     frame.portraitBorder:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
     frame.portraitBorder:SetTexCoord(0, 0.6, 0, 0.6)
 
@@ -2755,8 +2759,8 @@ local function CreateHistoryUI()
         "TOPLEFT",
         frame,
         "TOPLEFT",
-        101,
-        -48,
+        112,
+        -49,
         "LEFT"
     )
 
@@ -2766,8 +2770,8 @@ local function CreateHistoryUI()
         "TOPLEFT",
         frame,
         "TOPLEFT",
-        102,
-        -74,
+        113,
+        -75,
         "LEFT"
     )
     frame.characterMeta:SetTextColor(0.82, 0.72, 0.52, 1)
