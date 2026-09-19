@@ -611,8 +611,6 @@ local function EnsureCurrentLevelBaseline()
 
     local db = EnsureDatabase()
     local level = UnitLevel("player") or db.currentLevel or 1
-
-    RefreshCharacterHeader()
     local levelData = EnsureLevel(level)
     local currentXP = UnitXP("player") or 0
     local requiredXP = UnitXPMax("player") or 0
