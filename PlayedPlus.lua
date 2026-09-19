@@ -2029,7 +2029,7 @@ local function RenderCharacterSegments(row, segments, totalSeconds, barWidth)
     for index, data in ipairs(segments) do
         local segment = row.characterSegments[index]
         if not segment then
-            segment = CreateCharacterSegment(row.barFrame)
+            segment = CreateCharacterSegment(row.barContent)
             row.characterSegments[index] = segment
         end
 
@@ -2038,7 +2038,7 @@ local function RenderCharacterSegments(row, segments, totalSeconds, barWidth)
         local color = GetClassColor(data.classFile)
 
         segment:ClearAllPoints()
-        segment:SetPoint("LEFT", row.barFrame, "LEFT", offset, 0)
+        segment:SetPoint("LEFT", row.barContent, "LEFT", offset, 0)
         segment:SetWidth(math.max(1, width))
         segment:SetHeight(18)
         segment.texture:SetVertexColor(color[1], color[2], color[3], color[4])
@@ -2102,13 +2102,13 @@ end
 
 local function CreateHistoryRow(parent, index)
     local row = CreateFrame("Frame", nil, parent)
-    row:SetSize(960, 34)
+    row:SetSize(960, 32)
     row:SetPoint(
         "TOPLEFT",
         parent,
         "TOPLEFT",
         18,
-        -226 - ((index - 1) * 36)
+        -186 - ((index - 1) * 34)
     )
 
     if index % 2 == 0 then
@@ -2142,41 +2142,31 @@ local function CreateHistoryRow(parent, index)
     )
     row.time:SetWidth(104)
 
-    row.barFrame = CreateFrame("Frame", nil, row)
+    row.barFrame = CreateFrame("Frame", nil, row, BackdropTemplateMixin and "BackdropTemplate" or nil)
     row.barFrame:SetHeight(20)
     row.barFrame:SetPoint("LEFT", row, "LEFT", 204, 0)
 
-    row.barBackground = row.barFrame:CreateTexture(nil, "BACKGROUND")
-    row.barBackground:SetAllPoints()
-    row.barBackground:SetTexture("Interface\\Buttons\\WHITE8X8")
-    row.barBackground:SetVertexColor(0.055, 0.040, 0.022, 0.98)
+    -- One backdrop owns the entire bar outline. Using one native backdrop
+    -- avoids four independently-rasterized 1px textures producing uneven edges.
+    row.barFrame:SetBackdrop({
+        bgFile = "Interface\\Buttons\\WHITE8X8",
+        edgeFile = "Interface\\Buttons\\WHITE8X8",
+        edgeSize = 1,
+        insets = { left = 1, right = 1, top = 1, bottom = 1 },
+    })
+    row.barFrame:SetBackdropColor(0.055, 0.040, 0.022, 0.98)
+    row.barFrame:SetBackdropBorderColor(0.58, 0.43, 0.23, 0.95)
 
-    row.barEdges = {}
-    local borderColor = { 0.58, 0.43, 0.23, 0.95 }
-    local function AddBarEdge(point, relativePoint, x, y, width, height)
-        local edge = row.barFrame:CreateTexture(nil, "OVERLAY", nil, 7)
-        edge:SetPoint(point, row.barFrame, relativePoint, x, y)
-        edge:SetSize(width, height)
-        edge:SetTexture("Interface\\Buttons\\WHITE8X8")
-        edge:SetVertexColor(borderColor[1], borderColor[2], borderColor[3], borderColor[4])
-        table.insert(row.barEdges, edge)
-    end
+    -- Keep colored fills off the outline itself.
+    row.barContent = CreateFrame("Frame", nil, row.barFrame)
+    row.barContent:SetPoint("TOPLEFT", row.barFrame, "TOPLEFT", 1, -1)
+    row.barContent:SetPoint("BOTTOMRIGHT", row.barFrame, "BOTTOMRIGHT", -1, 1)
 
-    -- Draw all four edges one logical pixel inside the bar. Keeping every edge
-    -- on the same coordinate convention avoids half-pixel rasterization at
-    -- fractional UI scales and prevents the fill from obscuring the left edge.
-    AddBarEdge("TOPLEFT", "TOPLEFT", 0, 0, 1, 20)
-    AddBarEdge("TOPRIGHT", "TOPRIGHT", 0, 0, 1, 20)
-    AddBarEdge("TOPLEFT", "TOPLEFT", 0, 0, 1, 1)
-    row.barEdges[3]:SetWidth(row.barFrame:GetWidth())
-    AddBarEdge("BOTTOMLEFT", "BOTTOMLEFT", 0, 0, 1, 1)
-    row.barEdges[4]:SetWidth(row.barFrame:GetWidth())
-
-    row.mobSegment = CreateSegment(row.barFrame, XP_COLORS.mob)
-    row.questSegment = CreateSegment(row.barFrame, XP_COLORS.quest)
-    row.dungeonSegment = CreateSegment(row.barFrame, XP_COLORS.dungeon)
-    row.explorationSegment = CreateSegment(row.barFrame, XP_COLORS.exploration)
-    row.otherSegment = CreateSegment(row.barFrame, XP_COLORS.other)
+    row.mobSegment = CreateSegment(row.barContent, XP_COLORS.mob)
+    row.questSegment = CreateSegment(row.barContent, XP_COLORS.quest)
+    row.dungeonSegment = CreateSegment(row.barContent, XP_COLORS.dungeon)
+    row.explorationSegment = CreateSegment(row.barContent, XP_COLORS.exploration)
+    row.otherSegment = CreateSegment(row.barContent, XP_COLORS.other)
 
     row.progress = row.barFrame:CreateFontString(
         nil,
@@ -2188,7 +2178,7 @@ local function CreateHistoryRow(parent, index)
     row.progress:SetShadowOffset(1, -1)
     row.progress:Hide()
     row.characterSegments = {}
-    row.accountSegment = CreateAccountSegment(row.barFrame)
+    row.accountSegment = CreateAccountSegment(row.barContent)
     row.accountSegment:Hide()
 
     row.details = CreateText(
@@ -2265,10 +2255,6 @@ local function ApplyRowLayout(row)
     row.barFrame:ClearAllPoints()
     row.barFrame:SetPoint("LEFT", row, "LEFT", 204, 0)
     row.barFrame:SetWidth(barWidth)
-    if row.barEdges then
-        row.barEdges[3]:SetWidth(barWidth)
-        row.barEdges[4]:SetWidth(barWidth)
-    end
 
     if db.showDetails then
         row.details:Show()
@@ -2378,7 +2364,7 @@ local function RenderRow(row, data, view)
         row.level:SetFontObject("GameFontHighlight")
     end
 
-    local barWidth = ApplyRowLayout(row)
+    local barWidth = ApplyRowLayout(row) - 2
 
     if view == "days" then
         row.accountSegment:Hide()
@@ -2421,7 +2407,7 @@ local function RenderRow(row, data, view)
         local color = GetClassColor(data.classFile)
 
         row.accountSegment:ClearAllPoints()
-        row.accountSegment:SetPoint("LEFT", row.barFrame, "LEFT", 0, 0)
+        row.accountSegment:SetPoint("LEFT", row.barContent, "LEFT", 0, 0)
         row.accountSegment:SetWidth(math.max(1, width))
         row.accountSegment:SetHeight(18)
         row.accountSegment.texture:SetVertexColor(
@@ -2490,9 +2476,9 @@ local function RenderRow(row, data, view)
         local roundedProgress = math.floor(progressPct + 0.5)
         row.progress:SetText(string.format("%d%%", roundedProgress))
         if progressWidth <= (barWidth - 48) then
-            row.progress:SetPoint("LEFT", row.barFrame, "LEFT", math.max(6, progressWidth + 6), 0)
+            row.progress:SetPoint("LEFT", row.barContent, "LEFT", math.max(6, progressWidth + 6), 0)
         else
-            row.progress:SetPoint("RIGHT", row.barFrame, "RIGHT", -5, 0)
+            row.progress:SetPoint("RIGHT", row.barContent, "RIGHT", -5, 0)
         end
         row.progress:Show()
     else
@@ -2534,7 +2520,7 @@ local function ApplyHeaderLayout()
         historyFrame,
         "TOPLEFT",
         222,
-        -210
+        -170
     )
     historyFrame.barHeader:SetWidth(barWidth)
 
@@ -2546,7 +2532,7 @@ local function ApplyHeaderLayout()
             historyFrame,
             "TOPLEFT",
             18 + detailsX,
-            -210
+            -170
         )
     else
         historyFrame.detailsHeader:Hide()
@@ -2560,7 +2546,7 @@ local function ApplyHeaderLayout()
             historyFrame,
             "TOPLEFT",
             18 + statusX,
-            -210
+            -170
         )
     else
         historyFrame.statusHeader:Hide()
@@ -2869,7 +2855,7 @@ local function CreateHistoryUI()
         frame,
         "TOPLEFT",
         28,
-        -166,
+        -139,
         "LEFT"
     )
 
@@ -2880,7 +2866,7 @@ local function CreateHistoryUI()
         frame,
         "TOPLEFT",
         390,
-        -166,
+        -139,
         "LEFT"
     )
 
@@ -2891,7 +2877,7 @@ local function CreateHistoryUI()
         frame,
         "TOPLEFT",
         700,
-        -166,
+        -139,
         "LEFT"
     )
 
@@ -2905,8 +2891,8 @@ local function CreateHistoryUI()
         "TOPRIGHT",
         frame,
         "TOPRIGHT",
-        -348,
-        -124
+        -325,
+        -106
     )
     frame.levelsButton:SetScript("OnClick", function()
         currentView = "levels"
@@ -2951,8 +2937,8 @@ local function CreateHistoryUI()
 
     local syncButton = CreateFlatButton(
         frame,
-        "Sync /played",
-        120,
+        "Sync",
+        78,
         28
     )
     syncButton:SetPoint(
@@ -2960,7 +2946,7 @@ local function CreateHistoryUI()
         frame,
         "TOPRIGHT",
         -24,
-        -124
+        -48
     )
     syncButton:SetScript("OnClick", function()
         RequestPlayedSync()
@@ -2973,7 +2959,7 @@ local function CreateHistoryUI()
         frame,
         "TOPLEFT",
         24,
-        -201
+        -161
     )
     separator:SetPoint(
         "TOPRIGHT",
@@ -2993,7 +2979,7 @@ local function CreateHistoryUI()
         frame,
         "TOPLEFT",
         28,
-        -182,
+        -153,
         "LEFT"
     )
 
@@ -3016,7 +3002,7 @@ local function CreateHistoryUI()
         frame,
         "TOPLEFT",
         222,
-        -182,
+        -153,
         "CENTER"
     )
 
