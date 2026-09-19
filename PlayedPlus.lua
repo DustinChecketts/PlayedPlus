@@ -2749,22 +2749,39 @@ local function CreateHistoryUI()
     -- Character-sheet style identity block. The live unit portrait keeps this
     -- native and automatically matches the character being documented.
     frame.portraitFrame = CreateFrame("Frame", nil, frame)
-    frame.portraitFrame:SetSize(88, 88)
-    frame.portraitFrame:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, -34)
+    frame.portraitFrame:SetSize(68, 68)
+    frame.portraitFrame:SetPoint("TOPLEFT", frame, "TOPLEFT", 24, -42)
 
-    -- Keep the actual face comfortably inside the ornamental ring. The
-    -- Minimap tracking texture has a relatively thick inner lip, so using the
-    -- same size for portrait and border makes the ring visually cover the face.
+    -- Keep the live portrait at the existing readable size. Avoid scaling the
+    -- low-resolution Minimap tracking artwork; it becomes visibly pixelated.
     frame.portrait = frame.portraitFrame:CreateTexture(nil, "ARTWORK")
     frame.portrait:SetSize(62, 62)
-    frame.portrait:SetPoint("CENTER", frame.portraitFrame, "CENTER", -1, 1)
+    frame.portrait:SetPoint("CENTER")
     frame.portrait:SetTexCoord(0.09, 0.91, 0.09, 0.91)
 
-    frame.portraitBorder = frame.portraitFrame:CreateTexture(nil, "OVERLAY")
-    frame.portraitBorder:SetSize(88, 88)
+    -- Crisp two-tone hairline frame built from WHITE8X8 geometry. This is
+    -- intentionally restrained: the portrait provides identity, not a second
+    -- ornamental focal point.
+    frame.portraitBorder = CreateFrame("Frame", nil, frame.portraitFrame)
+    frame.portraitBorder:SetSize(66, 66)
     frame.portraitBorder:SetPoint("CENTER")
-    frame.portraitBorder:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
-    frame.portraitBorder:SetTexCoord(0, 0.6, 0, 0.6)
+    frame.portraitBorder:SetFrameLevel(frame.portraitFrame:GetFrameLevel() + 2)
+
+    local function PortraitEdge(pointA, pointB, width, height, color)
+        local edge = frame.portraitBorder:CreateTexture(nil, "OVERLAY")
+        edge:SetPoint(pointA)
+        edge:SetPoint(pointB)
+        if width then edge:SetWidth(width) end
+        if height then edge:SetHeight(height) end
+        edge:SetTexture("Interface\\Buttons\\WHITE8X8")
+        edge:SetVertexColor(color[1], color[2], color[3], color[4])
+    end
+
+    local bronze = { 0.62, 0.45, 0.20, 1 }
+    PortraitEdge("TOPLEFT", "TOPRIGHT", nil, 1, bronze)
+    PortraitEdge("BOTTOMLEFT", "BOTTOMRIGHT", nil, 1, bronze)
+    PortraitEdge("TOPLEFT", "BOTTOMLEFT", 1, nil, bronze)
+    PortraitEdge("TOPRIGHT", "BOTTOMRIGHT", 1, nil, bronze)
 
     frame.characterName = CreateText(
         frame,
@@ -2772,8 +2789,8 @@ local function CreateHistoryUI()
         "TOPLEFT",
         frame,
         "TOPLEFT",
-        112,
-        -49,
+        101,
+        -50,
         "LEFT"
     )
 
@@ -2783,8 +2800,8 @@ local function CreateHistoryUI()
         "TOPLEFT",
         frame,
         "TOPLEFT",
-        113,
-        -75,
+        102,
+        -74,
         "LEFT"
     )
     frame.characterMeta:SetTextColor(0.82, 0.72, 0.52, 1)
@@ -3042,9 +3059,10 @@ local function CreateHistoryUI()
     end
 
     CompactLegend(28, XP_COLORS.mob, "Kills · mob XP")
-    CompactLegend(215, XP_COLORS.quest, "Quests · turn-ins")
-    CompactLegend(420, XP_COLORS.dungeon, "Dungeon · kill XP")
-    CompactLegend(640, XP_COLORS.other, "Other · exploration")
+    CompactLegend(195, XP_COLORS.quest, "Quests · turn-ins")
+    CompactLegend(375, XP_COLORS.dungeon, "Dungeon · kill XP")
+    CompactLegend(570, XP_COLORS.exploration, "Exploration XP")
+    CompactLegend(750, XP_COLORS.other, "Other · unclassified")
 
     frame.dayLegendHint = frame:CreateFontString(
         nil,
