@@ -72,7 +72,7 @@ local XP_COLORS = {
     mob = { 0.25, 0.70, 0.20, 0.95 },
     quest = { 0.15, 0.45, 0.85, 0.95 },
     dungeon = { 0.55, 0.20, 0.75, 0.95 },
-    exploration = { 0.90, 0.58, 0.12, 0.95 },
+    exploration = { 0.90, 0.22, 0.10, 0.95 },
     other = { 0.50, 0.50, 0.50, 0.95 },
 }
 
@@ -1541,6 +1541,23 @@ local function GetLevelKillCount(levelData)
         + CountNewLedgerKills(levelData)
 end
 
+local function GetLevelExplorationCount(levelData)
+    local seenTransactions = {}
+    local count = 0
+
+    for _, event in ipairs(levelData.ledger or {}) do
+        if event.subtype == "exploration" and event.primary ~= false then
+            local key = event.transactionID or event.id
+            if not seenTransactions[key] then
+                seenTransactions[key] = true
+                count = count + 1
+            end
+        end
+    end
+
+    return count
+end
+
 local function GetLevelBreakdown(levelData, isCurrent)
     local totals = AggregateLevelXP(levelData)
     local mix = {
@@ -2091,7 +2108,7 @@ local function CreateHistoryRow(parent, index)
         parent,
         "TOPLEFT",
         18,
-        -198 - ((index - 1) * 36)
+        -204 - ((index - 1) * 36)
     )
 
     if index % 2 == 0 then
@@ -2283,6 +2300,7 @@ local function CollectLevelRows()
                 seconds = levelData.seconds,
                 quests = levelData.quests,
                 kills = GetLevelKillCount(levelData),
+                explorations = GetLevelExplorationCount(levelData),
                 dungeons = levelData.dungeons,
                 status =
                     level == currentLevel
@@ -2480,8 +2498,8 @@ local function RenderRow(row, data, view)
     SetSegmentTooltip(row.otherSegment, "Other / Unclassified XP", totals.other, mix.other)
 
     row.details:SetText(string.format(
-        "Quests: %d\nKills: %d\nDungeons: %d",
-        data.quests, data.kills, data.dungeons
+        "Quests: %d\nKills: %d\nExplored: %d\nDungeons: %d",
+        data.quests, data.kills, data.explorations or 0, data.dungeons
     ))
 
     row.status:SetText(data.status)
@@ -2508,7 +2526,7 @@ local function ApplyHeaderLayout()
         historyFrame,
         "TOPLEFT",
         222,
-        -182
+        -188
     )
     historyFrame.barHeader:SetWidth(barWidth)
 
@@ -2520,7 +2538,7 @@ local function ApplyHeaderLayout()
             historyFrame,
             "TOPLEFT",
             18 + detailsX,
-            -182
+            -188
         )
     else
         historyFrame.detailsHeader:Hide()
@@ -2534,7 +2552,7 @@ local function ApplyHeaderLayout()
             historyFrame,
             "TOPLEFT",
             18 + statusX,
-            -182
+            -188
         )
     else
         historyFrame.statusHeader:Hide()
@@ -2562,24 +2580,24 @@ local function RefreshHistoryUI()
     local today = EnsureDay()
 
     historyFrame.summaryLevel:SetText(
-        "Current level: "
-        .. level
-        .. "  •  "
+        "|cffffd100Level|r  |cffffffff"
         .. FormatDuration(levelData.seconds)
+        .. "|r"
     )
 
     local _, realmTodaySeconds = GetAccountDayBreakdown(GetDateKey())
 
     historyFrame.summaryToday:SetText(
-        "Realm today: " .. FormatDuration(realmTodaySeconds)
+        "|cffffd100Today|r  |cffffffff" .. FormatDuration(realmTodaySeconds) .. "|r"
     )
 
     local _, accountPlayed, accountCharacters, accountRealms =
         GetAccountLifetimeData()
 
     historyFrame.summaryTotal:SetText(
-        "Account /played: "
+        "|cffffd100Account|r  |cffffffff"
         .. FormatDuration(accountPlayed)
+        .. "|r"
     )
 
     SetButtonSelected(
@@ -2755,33 +2773,28 @@ local function CreateHistoryUI()
     -- Keep the live portrait at the existing readable size. Avoid scaling the
     -- low-resolution Minimap tracking artwork; it becomes visibly pixelated.
     frame.portrait = frame.portraitFrame:CreateTexture(nil, "ARTWORK")
-    frame.portrait:SetSize(62, 62)
+    frame.portrait:SetSize(56, 56)
     frame.portrait:SetPoint("CENTER")
     frame.portrait:SetTexCoord(0.09, 0.91, 0.09, 0.91)
 
-    -- Crisp two-tone hairline frame built from WHITE8X8 geometry. This is
-    -- intentionally restrained: the portrait provides identity, not a second
-    -- ornamental focal point.
-    frame.portraitBorder = CreateFrame("Frame", nil, frame.portraitFrame)
-    frame.portraitBorder:SetSize(66, 66)
-    frame.portraitBorder:SetPoint("CENTER")
-    frame.portraitBorder:SetFrameLevel(frame.portraitFrame:GetFrameLevel() + 2)
-
-    local function PortraitEdge(pointA, pointB, width, height, color)
-        local edge = frame.portraitBorder:CreateTexture(nil, "OVERLAY")
-        edge:SetPoint(pointA)
-        edge:SetPoint(pointB)
-        if width then edge:SetWidth(width) end
-        if height then edge:SetHeight(height) end
-        edge:SetTexture("Interface\\Buttons\\WHITE8X8")
-        edge:SetVertexColor(color[1], color[2], color[3], color[4])
+    -- Prefer Blizzard's circular portrait mask when available. The ring stays
+    -- close to its native resolution so it remains crisp instead of pixelating.
+    if frame.portrait.CreateMaskTexture and frame.portrait.AddMaskTexture then
+        frame.portraitMask = frame.portraitFrame:CreateMaskTexture()
+        frame.portraitMask:SetTexture(
+            "Interface\\CharacterFrame\\TempPortraitAlphaMask",
+            "CLAMPTOBLACKADDITIVE",
+            "CLAMPTOBLACKADDITIVE"
+        )
+        frame.portraitMask:SetAllPoints(frame.portrait)
+        frame.portrait:AddMaskTexture(frame.portraitMask)
     end
 
-    local bronze = { 0.62, 0.45, 0.20, 1 }
-    PortraitEdge("TOPLEFT", "TOPRIGHT", nil, 1, bronze)
-    PortraitEdge("BOTTOMLEFT", "BOTTOMRIGHT", nil, 1, bronze)
-    PortraitEdge("TOPLEFT", "BOTTOMLEFT", 1, nil, bronze)
-    PortraitEdge("TOPRIGHT", "BOTTOMRIGHT", 1, nil, bronze)
+    frame.portraitBorder = frame.portraitFrame:CreateTexture(nil, "OVERLAY")
+    frame.portraitBorder:SetSize(68, 68)
+    frame.portraitBorder:SetPoint("CENTER")
+    frame.portraitBorder:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
+    frame.portraitBorder:SetTexCoord(0, 0.6, 0, 0.6)
 
     frame.characterName = CreateText(
         frame,
@@ -2789,8 +2802,8 @@ local function CreateHistoryUI()
         "TOPLEFT",
         frame,
         "TOPLEFT",
-        101,
-        -50,
+        102,
+        -52,
         "LEFT"
     )
 
@@ -2800,8 +2813,8 @@ local function CreateHistoryUI()
         "TOPLEFT",
         frame,
         "TOPLEFT",
-        102,
-        -74,
+        103,
+        -76,
         "LEFT"
     )
     frame.characterMeta:SetTextColor(0.82, 0.72, 0.52, 1)
@@ -2823,8 +2836,8 @@ local function CreateHistoryUI()
         "TOPLEFT",
         frame,
         "TOPLEFT",
-        24,
-        -106,
+        28,
+        -142,
         "LEFT"
     )
 
@@ -2834,8 +2847,8 @@ local function CreateHistoryUI()
         "TOPLEFT",
         frame,
         "TOPLEFT",
-        370,
-        -106,
+        390,
+        -142,
         "LEFT"
     )
 
@@ -2845,8 +2858,8 @@ local function CreateHistoryUI()
         "TOPLEFT",
         frame,
         "TOPLEFT",
-        680,
-        -106,
+        700,
+        -142,
         "LEFT"
     )
 
@@ -2857,11 +2870,11 @@ local function CreateHistoryUI()
         28
     )
     frame.levelsButton:SetPoint(
-        "TOPLEFT",
+        "TOPRIGHT",
         frame,
-        "TOPLEFT",
-        24,
-        -136
+        "TOPRIGHT",
+        -348,
+        -55
     )
     frame.levelsButton:SetScript("OnClick", function()
         currentView = "levels"
@@ -2915,7 +2928,7 @@ local function CreateHistoryUI()
         frame,
         "TOPRIGHT",
         -24,
-        -136
+        -91
     )
     syncButton:SetScript("OnClick", function()
         RequestPlayedSync()
@@ -2928,14 +2941,14 @@ local function CreateHistoryUI()
         frame,
         "TOPLEFT",
         24,
-        -173
+        -179
     )
     separator:SetPoint(
         "TOPRIGHT",
         frame,
         "TOPRIGHT",
         -24,
-        -173
+        -179
     )
     separator:SetHeight(1)
     separator:SetTexture("Interface\\Buttons\\WHITE8X8")
@@ -3117,7 +3130,6 @@ end
 function PlayedPlus_ResetDisplayDefaults()
     local db = EnsureDatabase()
 
-    db.windowOpacity = 0.70
     db.showLabels = true
     db.showTooltips = true
     db.showDetails = true
