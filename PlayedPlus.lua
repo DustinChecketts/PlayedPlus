@@ -40,7 +40,7 @@ local eventFrame = CreateFrame("Frame")
 -- ============================================================================
 -- Schema versions change only when persisted data requires migration.
 local DB_VERSION = 28
-local ACCOUNT_DB_VERSION = 3
+local ACCOUNT_DB_VERSION = 4
 local LEDGER_VERSION = 1
 local HISTORY_VERSION = 1
 local TICK_INTERVAL = 1
@@ -222,9 +222,121 @@ local function GetRealmKey()
     return realm
 end
 
-local function GetCharacterKey()
+local function GetLegacyCharacterKey()
     local name = UnitName("player") or "Unknown"
     return name .. "-" .. GetRealmKey()
+end
+
+-- Character display names are not stable identifiers on Forever: a character
+-- may initially be exposed by first name and later by its full surname-bearing
+-- name. Prefer the GUID so a display-name change cannot create a second account
+-- record for the same character.
+local function GetCharacterKey()
+    local guid = UnitGUID and UnitGUID("player")
+    if guid and guid ~= "" then
+        return "GUID:" .. guid
+    end
+
+    return GetLegacyCharacterKey()
+end
+
+local function MergeCharacterRecord(target, source)
+    if type(target) ~= "table" or type(source) ~= "table" then
+        return
+    end
+
+    target.totalPlayed = math.max(
+        tonumber(target.totalPlayed) or 0,
+        tonumber(source.totalPlayed) or 0
+    )
+    target.level = math.max(
+        tonumber(target.level) or 0,
+        tonumber(source.level) or 0
+    )
+    target.lastSeenAt = math.max(
+        tonumber(target.lastSeenAt) or 0,
+        tonumber(source.lastSeenAt) or 0
+    )
+
+    target.name = target.name or source.name
+    target.realm = target.realm or source.realm
+    target.classFile = target.classFile or source.classFile
+    target.guid = target.guid or source.guid
+
+    if source.lastPlayedSyncAt then
+        target.lastPlayedSyncAt = math.max(
+            tonumber(target.lastPlayedSyncAt) or 0,
+            tonumber(source.lastPlayedSyncAt) or 0
+        )
+    end
+end
+
+-- Migrate name-keyed account records to GUID keys without discarding history.
+-- Duplicate records for one GUID are merged conservatively: lifetime /played and
+-- daily snapshots use the greatest authoritative snapshot, never their sum.
+local function MigrateAccountCharacterIdentity(realm)
+    if type(realm) ~= "table" then return end
+
+    realm.characters = realm.characters or {}
+    realm.days = realm.days or {}
+
+    local keyMap = {}
+
+    for oldKey, character in pairs(realm.characters) do
+        if type(character) == "table" and character.guid and character.guid ~= "" then
+            local newKey = "GUID:" .. character.guid
+            keyMap[oldKey] = newKey
+
+            if oldKey ~= newKey then
+                local target = realm.characters[newKey]
+                if type(target) ~= "table" then
+                    target = {}
+                    realm.characters[newKey] = target
+                end
+
+                MergeCharacterRecord(target, character)
+            end
+        end
+    end
+
+    -- Rewrite daily snapshots before removing their old character records.
+    for _, day in pairs(realm.days) do
+        if type(day) == "table" and type(day.characters) == "table" then
+            for oldKey, entry in pairs(day.characters) do
+                local newKey = keyMap[oldKey]
+                if newKey and newKey ~= oldKey and type(entry) == "table" then
+                    local target = day.characters[newKey]
+                    if type(target) ~= "table" then
+                        target = {}
+                        day.characters[newKey] = target
+                    end
+
+                    target.seconds = math.max(
+                        tonumber(target.seconds) or 0,
+                        tonumber(entry.seconds) or 0
+                    )
+                    target.syncedAt = math.max(
+                        tonumber(target.syncedAt) or 0,
+                        tonumber(entry.syncedAt) or 0
+                    )
+                    target.name = target.name or entry.name
+                    target.classFile = target.classFile or entry.classFile
+                end
+            end
+
+            for oldKey, newKey in pairs(keyMap) do
+                if oldKey ~= newKey then
+                    day.characters[oldKey] = nil
+                end
+            end
+        end
+    end
+
+    for oldKey, newKey in pairs(keyMap) do
+        if oldKey ~= newKey then
+            realm.characters[oldKey] = nil
+        end
+    end
 end
 
 local function EnsureAccountDatabase()
@@ -251,9 +363,36 @@ local function EnsureAccountDatabase()
     realm.characters = realm.characters or {}
     realm.days = realm.days or {}
 
+    -- Run on every load so records written by older Played Plus versions are
+    -- repaired even if the schema version was previously advanced.
+    MigrateAccountCharacterIdentity(realm)
+
     local characterKey = GetCharacterKey()
     local name = UnitName("player") or "Unknown"
     local _, classFile = UnitClass("player")
+    local guid = UnitGUID and UnitGUID("player")
+
+    -- If this character was last saved under its display-name key and that old
+    -- record predates GUID metadata, adopt it only when it is the current
+    -- character's exact legacy key. This preserves its history without guessing
+    -- about unrelated characters.
+    local legacyKey = GetLegacyCharacterKey()
+    if characterKey ~= legacyKey
+        and type(realm.characters[legacyKey]) == "table"
+        and type(realm.characters[characterKey]) ~= "table" then
+        realm.characters[characterKey] = realm.characters[legacyKey]
+        realm.characters[legacyKey] = nil
+
+        for _, day in pairs(realm.days) do
+            if type(day) == "table"
+                and type(day.characters) == "table"
+                and type(day.characters[legacyKey]) == "table"
+                and type(day.characters[characterKey]) ~= "table" then
+                day.characters[characterKey] = day.characters[legacyKey]
+                day.characters[legacyKey] = nil
+            end
+        end
+    end
 
     if type(realm.characters[characterKey]) ~= "table" then
         realm.characters[characterKey] = {}
@@ -263,7 +402,7 @@ local function EnsureAccountDatabase()
     character.name = name
     character.realm = realmKey
     character.classFile = classFile or character.classFile or "UNKNOWN"
-    character.guid = (UnitGUID and UnitGUID("player")) or character.guid
+    character.guid = guid or character.guid
     character.level = UnitLevel("player") or character.level
 
     local characterDB = PlayedPlusDB
