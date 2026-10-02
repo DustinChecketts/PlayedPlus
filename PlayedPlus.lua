@@ -829,8 +829,22 @@ end
 -- ============================================================================
 -- XP observation and source classification
 -- ============================================================================
+local function IsSecretValue(value)
+    -- Forever can mark combat/system event payloads as secret. Lua still reports
+    -- those values as strings, but any string conversion/manipulation on them
+    -- raises an error and taints the addon. Never inspect a protected payload.
+    if issecretvalue then
+        local ok, secret = pcall(issecretvalue, value)
+        if ok and secret then
+            return true
+        end
+    end
+
+    return false
+end
+
 local function ParseXPFromCombatMessage(message)
-    if type(message) ~= "string" then
+    if type(message) ~= "string" or IsSecretValue(message) then
         return nil
     end
 
@@ -856,7 +870,7 @@ local function ParseXPFromCombatMessage(message)
 end
 
 local function ParseExplorationXP(message)
-    if type(message) ~= "string" then
+    if type(message) ~= "string" or IsSecretValue(message) then
         return nil
     end
 
