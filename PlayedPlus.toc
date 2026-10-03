@@ -2,7 +2,7 @@
 ## Title: Played Plus
 ## Notes: Expands /played with level history, XP source tracking, daily activity, and account-wide playtime across realms.
 ## Author: StormtrooperTK421
-## Version: 1.0.0
+## Version: 1.1.0
 ## DefaultState: enabled
 ## SavedVariables: PlayedPlusAccountDB, PlayedTrackerPlusAccountDB
 ## SavedVariablesPerCharacter: PlayedPlusDB, PlayedTrackerPlusDB
