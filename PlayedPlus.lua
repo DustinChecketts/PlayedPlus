@@ -39,9 +39,10 @@ local eventFrame = CreateFrame("Frame")
 -- Configuration and runtime constants
 -- ============================================================================
 -- Schema versions change only when persisted data requires migration.
-local DB_VERSION = 27
-local ACCOUNT_DB_VERSION = 3
+local DB_VERSION = 28
+local ACCOUNT_DB_VERSION = 4
 local LEDGER_VERSION = 1
+local HISTORY_VERSION = 1
 local TICK_INTERVAL = 1
 -- XP collection is event-driven first, with UnitXP polling as a reliability
 -- backstop. Classification queues are runtime-only and never persisted.
@@ -72,6 +73,7 @@ local XP_COLORS = {
     mob = { 0.25, 0.70, 0.20, 0.95 },
     quest = { 0.15, 0.45, 0.85, 0.95 },
     dungeon = { 0.55, 0.20, 0.75, 0.95 },
+    exploration = { 0.95, 0.72, 0.08, 0.95 },
     other = { 0.50, 0.50, 0.50, 0.95 },
 }
 
@@ -197,6 +199,7 @@ local function EnsureDatabase()
     db.days = db.days or {}
     db.levels = db.levels or {}
     db.nextXPEventID = tonumber(db.nextXPEventID) or 1
+    db.historyVersion = tonumber(db.historyVersion) or 0
 
     db.windowOpacity = tonumber(db.windowOpacity) or 0.70
     db.windowOpacity = Clamp(db.windowOpacity, 0.20, 1.00)
@@ -219,9 +222,121 @@ local function GetRealmKey()
     return realm
 end
 
-local function GetCharacterKey()
+local function GetLegacyCharacterKey()
     local name = UnitName("player") or "Unknown"
     return name .. "-" .. GetRealmKey()
+end
+
+-- Character display names are not stable identifiers on Forever: a character
+-- may initially be exposed by first name and later by its full surname-bearing
+-- name. Prefer the GUID so a display-name change cannot create a second account
+-- record for the same character.
+local function GetCharacterKey()
+    local guid = UnitGUID and UnitGUID("player")
+    if guid and guid ~= "" then
+        return "GUID:" .. guid
+    end
+
+    return GetLegacyCharacterKey()
+end
+
+local function MergeCharacterRecord(target, source)
+    if type(target) ~= "table" or type(source) ~= "table" then
+        return
+    end
+
+    target.totalPlayed = math.max(
+        tonumber(target.totalPlayed) or 0,
+        tonumber(source.totalPlayed) or 0
+    )
+    target.level = math.max(
+        tonumber(target.level) or 0,
+        tonumber(source.level) or 0
+    )
+    target.lastSeenAt = math.max(
+        tonumber(target.lastSeenAt) or 0,
+        tonumber(source.lastSeenAt) or 0
+    )
+
+    target.name = target.name or source.name
+    target.realm = target.realm or source.realm
+    target.classFile = target.classFile or source.classFile
+    target.guid = target.guid or source.guid
+
+    if source.lastPlayedSyncAt then
+        target.lastPlayedSyncAt = math.max(
+            tonumber(target.lastPlayedSyncAt) or 0,
+            tonumber(source.lastPlayedSyncAt) or 0
+        )
+    end
+end
+
+-- Migrate name-keyed account records to GUID keys without discarding history.
+-- Duplicate records for one GUID are merged conservatively: lifetime /played and
+-- daily snapshots use the greatest authoritative snapshot, never their sum.
+local function MigrateAccountCharacterIdentity(realm)
+    if type(realm) ~= "table" then return end
+
+    realm.characters = realm.characters or {}
+    realm.days = realm.days or {}
+
+    local keyMap = {}
+
+    for oldKey, character in pairs(realm.characters) do
+        if type(character) == "table" and character.guid and character.guid ~= "" then
+            local newKey = "GUID:" .. character.guid
+            keyMap[oldKey] = newKey
+
+            if oldKey ~= newKey then
+                local target = realm.characters[newKey]
+                if type(target) ~= "table" then
+                    target = {}
+                    realm.characters[newKey] = target
+                end
+
+                MergeCharacterRecord(target, character)
+            end
+        end
+    end
+
+    -- Rewrite daily snapshots before removing their old character records.
+    for _, day in pairs(realm.days) do
+        if type(day) == "table" and type(day.characters) == "table" then
+            for oldKey, entry in pairs(day.characters) do
+                local newKey = keyMap[oldKey]
+                if newKey and newKey ~= oldKey and type(entry) == "table" then
+                    local target = day.characters[newKey]
+                    if type(target) ~= "table" then
+                        target = {}
+                        day.characters[newKey] = target
+                    end
+
+                    target.seconds = math.max(
+                        tonumber(target.seconds) or 0,
+                        tonumber(entry.seconds) or 0
+                    )
+                    target.syncedAt = math.max(
+                        tonumber(target.syncedAt) or 0,
+                        tonumber(entry.syncedAt) or 0
+                    )
+                    target.name = target.name or entry.name
+                    target.classFile = target.classFile or entry.classFile
+                end
+            end
+
+            for oldKey, newKey in pairs(keyMap) do
+                if oldKey ~= newKey then
+                    day.characters[oldKey] = nil
+                end
+            end
+        end
+    end
+
+    for oldKey, newKey in pairs(keyMap) do
+        if oldKey ~= newKey then
+            realm.characters[oldKey] = nil
+        end
+    end
 end
 
 local function EnsureAccountDatabase()
@@ -248,9 +363,36 @@ local function EnsureAccountDatabase()
     realm.characters = realm.characters or {}
     realm.days = realm.days or {}
 
+    -- Run on every load so records written by older Played Plus versions are
+    -- repaired even if the schema version was previously advanced.
+    MigrateAccountCharacterIdentity(realm)
+
     local characterKey = GetCharacterKey()
     local name = UnitName("player") or "Unknown"
     local _, classFile = UnitClass("player")
+    local guid = UnitGUID and UnitGUID("player")
+
+    -- If this character was last saved under its display-name key and that old
+    -- record predates GUID metadata, adopt it only when it is the current
+    -- character's exact legacy key. This preserves its history without guessing
+    -- about unrelated characters.
+    local legacyKey = GetLegacyCharacterKey()
+    if characterKey ~= legacyKey
+        and type(realm.characters[legacyKey]) == "table"
+        and type(realm.characters[characterKey]) ~= "table" then
+        realm.characters[characterKey] = realm.characters[legacyKey]
+        realm.characters[legacyKey] = nil
+
+        for _, day in pairs(realm.days) do
+            if type(day) == "table"
+                and type(day.characters) == "table"
+                and type(day.characters[legacyKey]) == "table"
+                and type(day.characters[characterKey]) ~= "table" then
+                day.characters[characterKey] = day.characters[legacyKey]
+                day.characters[legacyKey] = nil
+            end
+        end
+    end
 
     if type(realm.characters[characterKey]) ~= "table" then
         realm.characters[characterKey] = {}
@@ -260,7 +402,7 @@ local function EnsureAccountDatabase()
     character.name = name
     character.realm = realmKey
     character.classFile = classFile or character.classFile or "UNKNOWN"
-    character.guid = (UnitGUID and UnitGUID("player")) or character.guid
+    character.guid = guid or character.guid
     character.level = UnitLevel("player") or character.level
 
     local characterDB = PlayedPlusDB
@@ -687,8 +829,22 @@ end
 -- ============================================================================
 -- XP observation and source classification
 -- ============================================================================
+local function IsSecretValue(value)
+    -- Forever can mark combat/system event payloads as secret. Lua still reports
+    -- those values as strings, but any string conversion/manipulation on them
+    -- raises an error and taints the addon. Never inspect a protected payload.
+    if issecretvalue then
+        local ok, secret = pcall(issecretvalue, value)
+        if ok and secret then
+            return true
+        end
+    end
+
+    return false
+end
+
 local function ParseXPFromCombatMessage(message)
-    if type(message) ~= "string" then
+    if type(message) ~= "string" or IsSecretValue(message) then
         return nil
     end
 
@@ -714,7 +870,7 @@ local function ParseXPFromCombatMessage(message)
 end
 
 local function ParseExplorationXP(message)
-    if type(message) ~= "string" then
+    if type(message) ~= "string" or IsSecretValue(message) then
         return nil
     end
 
@@ -1327,6 +1483,7 @@ local function AggregateLevelXP(levelData)
         mob = 0,
         quest = 0,
         dungeon = 0,
+        exploration = 0,
         other = 0,
         total = 0,
     }
@@ -1334,8 +1491,9 @@ local function AggregateLevelXP(levelData)
     for _, event in ipairs(levelData.ledger or {}) do
         local amount = tonumber(event.amount) or 0
         local source = NormalizeSource(event.source)
+        local bucket = event.subtype == "exploration" and "exploration" or source
 
-        totals[source] = totals[source] + amount
+        totals[bucket] = totals[bucket] + amount
         totals.total = totals.total + amount
     end
 
@@ -1538,12 +1696,96 @@ local function GetLevelKillCount(levelData)
         + CountNewLedgerKills(levelData)
 end
 
+local function GetLevelExplorationCount(levelData)
+    local seenTransactions = {}
+    local count = 0
+
+    for _, event in ipairs(levelData.ledger or {}) do
+        if event.subtype == "exploration" and event.primary ~= false then
+            local key = event.transactionID or event.id
+            if not seenTransactions[key] then
+                seenTransactions[key] = true
+                count = count + 1
+            end
+        end
+    end
+
+    return count
+end
+
+-- Build a compact, permanent record for a completed level. During the
+-- recovery migration we intentionally retain every existing ledger. Pruning
+-- is enabled only after the summary format has been proven against live data.
+local function BuildLevelSummary(levelData)
+    if type(levelData) ~= "table" or not levelData.completedAt then
+        return nil
+    end
+
+    local totals = AggregateLevelXP(levelData)
+    local summary = {
+        version = HISTORY_VERSION,
+        level = tonumber(levelData.level) or 0,
+        startedAt = levelData.startedAt,
+        completedAt = levelData.completedAt,
+        seconds = tonumber(levelData.seconds) or 0,
+        xpRequired = tonumber(levelData.xpRequired) or totals.total or 0,
+        quests = tonumber(levelData.quests) or 0,
+        kills = GetLevelKillCount(levelData),
+        explorations = GetLevelExplorationCount(levelData),
+        dungeons = tonumber(levelData.dungeons) or 0,
+        xp = {
+            mob = totals.mob,
+            quest = totals.quest,
+            dungeon = totals.dungeon,
+            exploration = totals.exploration,
+            other = totals.other,
+            total = totals.total,
+        },
+    }
+
+    levelData.summary = summary
+    return summary
+end
+
+local function EnsureHistoricalSummaries()
+    local db = EnsureDatabase()
+
+    for _, levelData in pairs(db.levels or {}) do
+        if type(levelData) == "table" and levelData.completedAt then
+            if type(levelData.summary) ~= "table"
+                or tonumber(levelData.summary.version) ~= HISTORY_VERSION then
+                BuildLevelSummary(levelData)
+            end
+        end
+    end
+
+    db.historyVersion = HISTORY_VERSION
+end
+
+local function GetHistoricalLevelNumbers()
+    local db = EnsureDatabase()
+    local levels = {}
+
+    for key, levelData in pairs(db.levels or {}) do
+        if type(levelData) == "table" then
+            local level = tonumber(levelData.level) or tonumber(key)
+            if level then
+                table.insert(levels, level)
+            end
+        end
+    end
+
+    table.sort(levels, function(a, b) return a > b end)
+    return levels
+end
+
 local function GetLevelBreakdown(levelData, isCurrent)
     local totals = AggregateLevelXP(levelData)
     local mix = {
         mob = 0,
         quest = 0,
         dungeon = 0,
+        exploration = 0,
         other = 0,
     }
 
@@ -1551,6 +1793,7 @@ local function GetLevelBreakdown(levelData, isCurrent)
         mix.mob = totals.mob / totals.total * 100
         mix.quest = totals.quest / totals.total * 100
         mix.dungeon = totals.dungeon / totals.total * 100
+        mix.exploration = totals.exploration / totals.total * 100
         mix.other = totals.other / totals.total * 100
     end
 
@@ -1645,7 +1888,7 @@ local function ShowCurrentLevel()
     local breakdown = GetLevelBreakdown(levelData, true)
 
     Print(string.format(
-        "Level %d: %s | Q:%d K:%d D:%d | XP K:%d%% Q:%d%% D:%d%% O:%d%%",
+        "Level %d: %s | Q:%d K:%d D:%d | XP K:%d%% Q:%d%% D:%d%% E:%d%% O:%d%%",
         level,
         FormatDuration(levelData.seconds),
         levelData.quests,
@@ -1654,6 +1897,7 @@ local function ShowCurrentLevel()
         math.floor(breakdown.mix.mob + 0.5),
         math.floor(breakdown.mix.quest + 0.5),
         math.floor(breakdown.mix.dungeon + 0.5),
+        math.floor(breakdown.mix.exploration + 0.5),
         math.floor(breakdown.mix.other + 0.5)
     ))
 end
@@ -1719,60 +1963,12 @@ local function CreateText(
 end
 
 local function CreateFlatButton(parent, label, width, height)
-    local button = CreateFrame("Button", nil, parent)
+    -- Use Blizzard's own panel button art so the tracker feels like a native
+    -- game window on every client that exposes the standard template.
+    local button = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
     button:SetSize(width, height)
-
-    button.bg = button:CreateTexture(nil, "BACKGROUND")
-    button.bg:SetAllPoints()
-    button.bg:SetTexture("Interface\\Buttons\\WHITE8X8")
-    button.bg:SetVertexColor(0.12, 0.12, 0.12, 0.95)
-
-    local borders = {}
-
-    borders[1] = button:CreateTexture(nil, "BORDER")
-    borders[1]:SetPoint("TOPLEFT")
-    borders[1]:SetPoint("TOPRIGHT")
-    borders[1]:SetHeight(1)
-
-    borders[2] = button:CreateTexture(nil, "BORDER")
-    borders[2]:SetPoint("BOTTOMLEFT")
-    borders[2]:SetPoint("BOTTOMRIGHT")
-    borders[2]:SetHeight(1)
-
-    borders[3] = button:CreateTexture(nil, "BORDER")
-    borders[3]:SetPoint("TOPLEFT")
-    borders[3]:SetPoint("BOTTOMLEFT")
-    borders[3]:SetWidth(1)
-
-    borders[4] = button:CreateTexture(nil, "BORDER")
-    borders[4]:SetPoint("TOPRIGHT")
-    borders[4]:SetPoint("BOTTOMRIGHT")
-    borders[4]:SetWidth(1)
-
-    for i = 1, 4 do
-        borders[i]:SetTexture("Interface\\Buttons\\WHITE8X8")
-        borders[i]:SetVertexColor(0.45, 0.45, 0.45, 1)
-    end
-
-    button.label = button:CreateFontString(
-        nil,
-        "OVERLAY",
-        "GameFontNormal"
-    )
-    button.label:SetPoint("CENTER")
-    button.label:SetText(label)
-
-    button:SetScript("OnEnter", function(self)
-        self.bg:SetVertexColor(0.22, 0.22, 0.22, 0.95)
-    end)
-
-    button:SetScript("OnLeave", function(self)
-        if self.selected then
-            self.bg:SetVertexColor(0.25, 0.45, 0.70, 0.95)
-        else
-            self.bg:SetVertexColor(0.12, 0.12, 0.12, 0.95)
-        end
-    end)
+    button:SetText(label)
+    button.label = button:GetFontString()
 
     return button
 end
@@ -1781,11 +1977,44 @@ local function SetButtonSelected(button, selected)
     button.selected = selected
 
     if selected then
-        button.bg:SetVertexColor(0.25, 0.45, 0.70, 0.95)
-        button.label:SetTextColor(1, 1, 1)
+        button:LockHighlight()
+        if button.label then
+            button.label:SetTextColor(1, 1, 1)
+        end
     else
-        button.bg:SetVertexColor(0.12, 0.12, 0.12, 0.95)
-        button.label:SetTextColor(1, 0.82, 0)
+        button:UnlockHighlight()
+        if button.label then
+            button.label:SetTextColor(1, 0.82, 0)
+        end
+    end
+end
+
+local function RefreshCharacterHeader()
+    if not historyFrame then
+        return
+    end
+
+    local name = UnitName("player") or "Unknown"
+    local realm = GetRealmKey()
+    local level = UnitLevel("player") or 1
+    local localizedClass = UnitClass("player") or "Unknown"
+
+    if historyFrame.characterName then
+        historyFrame.characterName:SetText(name)
+    end
+
+    if historyFrame.characterMeta then
+        historyFrame.characterMeta:SetText(
+            string.format("Level %d %s  •  %s", level, localizedClass, realm)
+        )
+    end
+
+    if historyFrame.portrait then
+        if SetPortraitTexture then
+            SetPortraitTexture(historyFrame.portrait, "player")
+        else
+            SetPortraitTextureFromCreatureDisplayID(historyFrame.portrait, 0)
+        end
     end
 end
 
@@ -1798,9 +2027,9 @@ local function ApplyWindowOpacity()
     local opacity = Clamp(db.windowOpacity or 0.70, 0.20, 1.00)
 
     historyFrame.background:SetVertexColor(
-        0.025,
-        0.025,
-        0.025,
+        0.055,
+        0.038,
+        0.018,
         opacity
     )
 
@@ -1810,11 +2039,24 @@ local function ApplyWindowOpacity()
         0.07,
         math.min(1, opacity + 0.03)
     )
+
+    -- BasicFrameTemplateWithInset brings its own opaque background/chrome.
+    -- Fade those artwork regions with the user's setting without fading text,
+    -- bars, buttons, or other child controls.
+    if historyFrame.Bg then
+        historyFrame.Bg:SetAlpha(opacity)
+    end
+    if historyFrame.Inset then
+        historyFrame.Inset:SetAlpha(opacity)
+    end
+    if historyFrame.NineSlice then
+        historyFrame.NineSlice:SetAlpha(math.max(0.55, opacity))
+    end
 end
 
 local function CreateSegment(parent, color)
     local segment = CreateFrame("Frame", nil, parent)
-    segment:SetHeight(20)
+    segment:SetHeight(18)
     segment:EnableMouse(true)
 
     segment.texture = segment:CreateTexture(nil, "ARTWORK")
@@ -1874,7 +2116,7 @@ end
 
 local function CreateCharacterSegment(parent)
     local segment = CreateFrame("Frame", nil, parent)
-    segment:SetHeight(20)
+    segment:SetHeight(18)
     segment:EnableMouse(true)
 
     segment.texture = segment:CreateTexture(nil, "ARTWORK")
@@ -1911,7 +2153,7 @@ end
 
 local function CreateAccountSegment(parent)
     local segment = CreateFrame("Frame", nil, parent)
-    segment:SetHeight(20)
+    segment:SetHeight(18)
     segment:EnableMouse(true)
 
     segment.texture = segment:CreateTexture(nil, "ARTWORK")
@@ -2008,7 +2250,7 @@ local function RenderCharacterSegments(row, segments, totalSeconds, barWidth)
     for index, data in ipairs(segments) do
         local segment = row.characterSegments[index]
         if not segment then
-            segment = CreateCharacterSegment(row.barFrame)
+            segment = CreateCharacterSegment(row.barContent)
             row.characterSegments[index] = segment
         end
 
@@ -2017,9 +2259,9 @@ local function RenderCharacterSegments(row, segments, totalSeconds, barWidth)
         local color = GetClassColor(data.classFile)
 
         segment:ClearAllPoints()
-        segment:SetPoint("LEFT", row.barFrame, "LEFT", offset, 0)
+        segment:SetPoint("LEFT", row.barContent, "LEFT", offset, 0)
         segment:SetWidth(math.max(1, width))
-        segment:SetHeight(20)
+        segment:SetHeight(18)
         segment.texture:SetVertexColor(color[1], color[2], color[3], color[4])
         segment.characterName = data.name
         segment.classFile = data.classFile
@@ -2081,20 +2323,20 @@ end
 
 local function CreateHistoryRow(parent, index)
     local row = CreateFrame("Frame", nil, parent)
-    row:SetSize(960, 34)
+    row:SetSize(860, 28)
     row:SetPoint(
         "TOPLEFT",
         parent,
         "TOPLEFT",
         18,
-        -146 - ((index - 1) * 36)
+        -166 - ((index - 1) * 30)
     )
 
     if index % 2 == 0 then
         row.background = row:CreateTexture(nil, "BACKGROUND")
         row.background:SetAllPoints()
         row.background:SetTexture("Interface\\Buttons\\WHITE8X8")
-        row.background:SetVertexColor(1, 1, 1, 0.035)
+        row.background:SetVertexColor(0.42, 0.31, 0.16, 0.10)
     end
 
     row.level = CreateText(
@@ -2115,25 +2357,31 @@ local function CreateHistoryRow(parent, index)
         "LEFT",
         row,
         "LEFT",
-        96,
+        88,
         0,
         "LEFT"
     )
-    row.time:SetWidth(104)
+    row.time:SetWidth(96)
 
     row.barFrame = CreateFrame("Frame", nil, row)
-    row.barFrame:SetHeight(20)
-    row.barFrame:SetPoint("LEFT", row, "LEFT", 204, 0)
+    row.barFrame:SetHeight(18)
+    row.barFrame:SetPoint("LEFT", row, "LEFT", 190, 0)
 
+    -- A borderless, uniform track renders consistently at fractional UI scales.
+    -- The colored segments themselves provide the visual edge.
     row.barBackground = row.barFrame:CreateTexture(nil, "BACKGROUND")
     row.barBackground:SetAllPoints()
     row.barBackground:SetTexture("Interface\\Buttons\\WHITE8X8")
-    row.barBackground:SetVertexColor(0.07, 0.07, 0.07, 0.98)
+    row.barBackground:SetVertexColor(0.045, 0.038, 0.028, 0.98)
 
-    row.mobSegment = CreateSegment(row.barFrame, XP_COLORS.mob)
-    row.questSegment = CreateSegment(row.barFrame, XP_COLORS.quest)
-    row.dungeonSegment = CreateSegment(row.barFrame, XP_COLORS.dungeon)
-    row.otherSegment = CreateSegment(row.barFrame, XP_COLORS.other)
+    row.barContent = CreateFrame("Frame", nil, row.barFrame)
+    row.barContent:SetAllPoints()
+
+    row.mobSegment = CreateSegment(row.barContent, XP_COLORS.mob)
+    row.questSegment = CreateSegment(row.barContent, XP_COLORS.quest)
+    row.dungeonSegment = CreateSegment(row.barContent, XP_COLORS.dungeon)
+    row.explorationSegment = CreateSegment(row.barContent, XP_COLORS.exploration)
+    row.otherSegment = CreateSegment(row.barContent, XP_COLORS.other)
 
     row.progress = row.barFrame:CreateFontString(
         nil,
@@ -2145,7 +2393,7 @@ local function CreateHistoryRow(parent, index)
     row.progress:SetShadowOffset(1, -1)
     row.progress:Hide()
     row.characterSegments = {}
-    row.accountSegment = CreateAccountSegment(row.barFrame)
+    row.accountSegment = CreateAccountSegment(row.barContent)
     row.accountSegment:Hide()
 
     row.details = CreateText(
@@ -2158,7 +2406,7 @@ local function CreateHistoryRow(parent, index)
         0,
         "LEFT"
     )
-    row.details:SetWidth(160)
+    row.details:SetWidth(155)
 
     row.status = CreateText(
         row,
@@ -2175,55 +2423,27 @@ local function CreateHistoryRow(parent, index)
     return row
 end
 
-local function GetRowLayout()
-    local db = EnsureDatabase()
+local function GetRowLayout(view)
+    local rowWidth = 860
+    local barX = 190
 
-    local rowWidth = 960
-    local barX = 204
-    local rightPadding = 10
-    local gap = 12
-    local detailsWidth = 160
-    local statusWidth = 65
-
-    local reserved = rightPadding
-
-    if db.showDetails then
-        reserved = reserved + gap + detailsWidth
+    if view == "levels" then
+        local activityX = 700
+        return activityX - barX - 12, activityX, nil
     end
 
-    if db.showStatus then
-        reserved = reserved + gap + statusWidth
-    end
-
-    local barWidth = rowWidth - barX - reserved
-    local cursor = barX + barWidth
-
-    local detailsX = nil
-    local statusX = nil
-
-    if db.showDetails then
-        cursor = cursor + gap
-        detailsX = cursor
-        cursor = cursor + detailsWidth
-    end
-
-    if db.showStatus then
-        cursor = cursor + gap
-        statusX = cursor
-    end
-
-    return barWidth, detailsX, statusX
+    -- Days and Account devote the rest of the row to the visualization.
+    return rowWidth - barX - 8, nil, nil
 end
 
-local function ApplyRowLayout(row)
-    local db = EnsureDatabase()
-    local barWidth, detailsX, statusX = GetRowLayout()
+local function ApplyRowLayout(row, view)
+    local barWidth, detailsX = GetRowLayout(view)
 
     row.barFrame:ClearAllPoints()
-    row.barFrame:SetPoint("LEFT", row, "LEFT", 204, 0)
+    row.barFrame:SetPoint("LEFT", row, "LEFT", 190, 0)
     row.barFrame:SetWidth(barWidth)
 
-    if db.showDetails then
+    if view == "levels" and detailsX then
         row.details:Show()
         row.details:ClearAllPoints()
         row.details:SetPoint("LEFT", row, "LEFT", detailsX, 0)
@@ -2231,14 +2451,7 @@ local function ApplyRowLayout(row)
         row.details:Hide()
     end
 
-    if db.showStatus then
-        row.status:Show()
-        row.status:ClearAllPoints()
-        row.status:SetPoint("LEFT", row, "LEFT", statusX, 0)
-    else
-        row.status:Hide()
-    end
-
+    row.status:Hide()
     return barWidth
 end
 
@@ -2246,8 +2459,16 @@ local function CollectLevelRows()
     local db = EnsureDatabase()
     local currentLevel = UnitLevel("player") or db.currentLevel or 1
     local rows = {}
+    local levels = GetHistoricalLevelNumbers()
 
-    for level = currentLevel, math.max(1, currentLevel - MAX_ROWS + 1), -1 do
+    -- Historical records are evidence. Enumerate the records that actually
+    -- exist instead of assuming db.currentLevel defines the valid range.
+    -- This keeps older/later records visible even if metadata was damaged.
+    for _, level in ipairs(levels) do
+        if #rows >= MAX_ROWS then
+            break
+        end
+
         local levelData = db.levels[level]
 
         if levelData then
@@ -2261,6 +2482,7 @@ local function CollectLevelRows()
                 seconds = levelData.seconds,
                 quests = levelData.quests,
                 kills = GetLevelKillCount(levelData),
+                explorations = GetLevelExplorationCount(levelData),
                 dungeons = levelData.dungeons,
                 status =
                     level == currentLevel
@@ -2283,9 +2505,10 @@ local function CollectDayRows()
         local segments, totalSeconds = GetAccountDayBreakdown(dateKey)
 
         table.insert(rows, {
-            label = FormatHistoryDate(dateKey),
+            label = FormatHistoryDate(dateKey)
+                .. (dateKey == GetDateKey() and "  |cffffd100Today|r" or ""),
             seconds = totalSeconds,
-            status = dateKey == GetDateKey() and "Today" or "",
+            status = "",
             characterSegments = segments,
         })
     end
@@ -2330,30 +2553,19 @@ local function RenderRow(row, data, view)
         row.level:SetFontObject("GameFontHighlight")
     end
 
-    local barWidth = ApplyRowLayout(row)
+    local barWidth = ApplyRowLayout(row, view)
 
     if view == "days" then
         row.accountSegment:Hide()
         row.mobSegment:Hide()
         row.questSegment:Hide()
         row.dungeonSegment:Hide()
+        row.explorationSegment:Hide()
         row.otherSegment:Hide()
         row.progress:Hide()
 
         RenderCharacterSegments(row, data.characterSegments or {}, data.seconds or 0, barWidth)
 
-        row.details:SetText(string.format(
-            "%d character%s",
-            #(data.characterSegments or {}),
-            #(data.characterSegments or {}) == 1 and "" or "s"
-        ))
-
-        row.status:SetText(data.status)
-        if data.status == "Today" then
-            row.status:SetTextColor(1, 0.82, 0)
-        else
-            row.status:SetTextColor(1, 1, 1)
-        end
         return
     end
 
@@ -2363,6 +2575,7 @@ local function RenderRow(row, data, view)
         row.mobSegment:Hide()
         row.questSegment:Hide()
         row.dungeonSegment:Hide()
+        row.explorationSegment:Hide()
         row.otherSegment:Hide()
         row.progress:Hide()
 
@@ -2371,9 +2584,9 @@ local function RenderRow(row, data, view)
         local color = GetClassColor(data.classFile)
 
         row.accountSegment:ClearAllPoints()
-        row.accountSegment:SetPoint("LEFT", row.barFrame, "LEFT", 0, 0)
+        row.accountSegment:SetPoint("LEFT", row.barContent, "LEFT", 0, 0)
         row.accountSegment:SetWidth(math.max(1, width))
-        row.accountSegment:SetHeight(20)
+        row.accountSegment:SetHeight(18)
         row.accountSegment.texture:SetVertexColor(
             color[1], color[2], color[3], color[4]
         )
@@ -2396,16 +2609,6 @@ local function RenderRow(row, data, view)
 
         row.accountSegment:Show()
 
-        row.details:SetText(string.format(
-            "%d char%s • %d realm%s",
-            data.characterCount or 0,
-            (data.characterCount or 0) == 1 and "" or "s",
-            data.realmCount or 0,
-            (data.realmCount or 0) == 1 and "" or "s"
-        ))
-
-        row.status:SetText(data.status or "")
-        row.status:SetTextColor(1, 0.82, 0)
         return
     end
 
@@ -2421,6 +2624,7 @@ local function RenderRow(row, data, view)
     local mobWidth = progressWidth * mix.mob / 100
     local questWidth = progressWidth * mix.quest / 100
     local dungeonWidth = progressWidth * mix.dungeon / 100
+    local explorationWidth = progressWidth * mix.exploration / 100
     local otherWidth = progressWidth * mix.other / 100
 
     local offset = 0
@@ -2430,6 +2634,8 @@ local function RenderRow(row, data, view)
     offset = offset + questWidth
     SetSegment(row.dungeonSegment, offset, dungeonWidth, mix.dungeon)
     offset = offset + dungeonWidth
+    SetSegment(row.explorationSegment, offset, explorationWidth, mix.exploration)
+    offset = offset + explorationWidth
     SetSegment(row.otherSegment, offset, otherWidth, mix.other)
 
     row.progress:ClearAllPoints()
@@ -2437,9 +2643,9 @@ local function RenderRow(row, data, view)
         local roundedProgress = math.floor(progressPct + 0.5)
         row.progress:SetText(string.format("%d%%", roundedProgress))
         if progressWidth <= (barWidth - 48) then
-            row.progress:SetPoint("LEFT", row.barFrame, "LEFT", math.max(6, progressWidth + 6), 0)
+            row.progress:SetPoint("LEFT", row.barContent, "LEFT", math.max(6, progressWidth + 6), 0)
         else
-            row.progress:SetPoint("RIGHT", row.barFrame, "RIGHT", -5, 0)
+            row.progress:SetPoint("RIGHT", row.barContent, "RIGHT", -5, 0)
         end
         row.progress:Show()
     else
@@ -2449,68 +2655,50 @@ local function RenderRow(row, data, view)
     SetSegmentTooltip(row.mobSegment, "Kills XP", totals.mob, mix.mob)
     SetSegmentTooltip(row.questSegment, "Quest XP", totals.quest, mix.quest)
     SetSegmentTooltip(row.dungeonSegment, "Dungeon XP", totals.dungeon, mix.dungeon)
-    SetSegmentTooltip(row.otherSegment, "Other XP (exploration / unclassified)", totals.other, mix.other)
+    SetSegmentTooltip(row.explorationSegment, "Exploration XP", totals.exploration, mix.exploration)
+    SetSegmentTooltip(row.otherSegment, "Other / Unclassified XP", totals.other, mix.other)
 
-    row.details:SetText(string.format(
-        "Quests: %d\nKills: %d\nDungeons: %d",
-        data.quests, data.kills, data.dungeons
-    ))
+    local activity = {}
+    if (data.quests or 0) > 0 then
+        table.insert(activity, "|cff2673d9" .. data.quests .. " Quests|r")
+    end
+    if (data.kills or 0) > 0 then
+        table.insert(activity, "|cff40b333" .. data.kills .. " Kills|r")
+    end
+    if (data.explorations or 0) > 0 then
+        table.insert(activity, "|cfff2b814" .. data.explorations .. " Explored|r")
+    end
+    if (data.dungeons or 0) > 0 then
+        table.insert(activity, "|cff8c33bf" .. data.dungeons .. " Dungeons|r")
+    end
+    row.details:SetText(table.concat(activity, "  •  "))
 
-    row.status:SetText(data.status)
     if data.status == "Current" then
-        row.status:SetTextColor(1, 0.82, 0)
-    elseif data.status == "Complete" then
-        row.status:SetTextColor(0.35, 1, 0.35)
-    else
-        row.status:SetTextColor(1, 1, 1)
+        row.level:SetText("|cffffd100" .. tostring(data.label) .. "|r")
     end
 end
 
 local function ApplyHeaderLayout()
-    if not historyFrame then
-        return
-    end
+    if not historyFrame then return end
 
-    local db = EnsureDatabase()
-    local barWidth, detailsX, statusX = GetRowLayout()
+    local barWidth, detailsX = GetRowLayout(currentView)
 
     historyFrame.barHeader:ClearAllPoints()
-    historyFrame.barHeader:SetPoint(
-        "TOPLEFT",
-        historyFrame,
-        "TOPLEFT",
-        222,
-        -130
-    )
+    historyFrame.barHeader:SetPoint("TOPLEFT", historyFrame, "TOPLEFT", 208, -145)
     historyFrame.barHeader:SetWidth(barWidth)
 
-    if db.showDetails then
+    if currentView == "levels" and detailsX then
         historyFrame.detailsHeader:Show()
         historyFrame.detailsHeader:ClearAllPoints()
         historyFrame.detailsHeader:SetPoint(
-            "TOPLEFT",
-            historyFrame,
-            "TOPLEFT",
-            18 + detailsX,
-            -130
+            "TOPLEFT", historyFrame, "TOPLEFT", 18 + detailsX, -145
         )
+        historyFrame.detailsHeader:SetText("Activity")
     else
         historyFrame.detailsHeader:Hide()
     end
 
-    if db.showStatus then
-        historyFrame.statusHeader:Show()
-        historyFrame.statusHeader:ClearAllPoints()
-        historyFrame.statusHeader:SetPoint(
-            "TOPLEFT",
-            historyFrame,
-            "TOPLEFT",
-            18 + statusX,
-            -130
-        )
-    else
-        historyFrame.statusHeader:Hide()
-    end
+    historyFrame.statusHeader:Hide()
 end
 
 local function RefreshHistoryUI()
@@ -2522,28 +2710,36 @@ local function RefreshHistoryUI()
 
     local db = EnsureDatabase()
     local level = UnitLevel("player") or db.currentLevel or 1
+
+    if historyFrame.characterLine then
+        historyFrame.characterLine:SetText(
+            tostring(UnitName("player") or "Unknown")
+            .. "  •  "
+            .. tostring(GetRealmKey())
+        )
+    end
     local levelData = EnsureLevel(level)
     local today = EnsureDay()
 
     historyFrame.summaryLevel:SetText(
-        "Current level: "
-        .. level
-        .. "  •  "
+        "|cffffd100This level|r  |cffffffff"
         .. FormatDuration(levelData.seconds)
+        .. "|r"
     )
 
     local _, realmTodaySeconds = GetAccountDayBreakdown(GetDateKey())
 
     historyFrame.summaryToday:SetText(
-        "Realm today: " .. FormatDuration(realmTodaySeconds)
+        "|cffffd100Today|r  |cffffffff" .. FormatDuration(realmTodaySeconds) .. "|r"
     )
 
     local _, accountPlayed, accountCharacters, accountRealms =
         GetAccountLifetimeData()
 
     historyFrame.summaryTotal:SetText(
-        "Account /played: "
+        "|cffffd100Account|r  |cffffffff"
         .. FormatDuration(accountPlayed)
+        .. "|r"
     )
 
     SetButtonSelected(
@@ -2574,13 +2770,13 @@ local function RefreshHistoryUI()
     if historyFrame.dayLegendHint then
         if currentView == "days" then
             historyFrame.dayLegendHint:SetText(
-                "Realm days: class-colored character segments • hover for details"
+                "Class-colored by character • hover for details"
             )
             historyFrame.dayLegendHint:Show()
         elseif currentView == "account" then
             historyFrame.dayLegendHint:SetText(
                 string.format(
-                    "Account: %d character%s across %d realm%s • hover a class for characters",
+                    "%d character%s • %d realm%s • hover a class for details",
                     accountCharacters,
                     accountCharacters == 1 and "" or "s",
                     accountRealms,
@@ -2598,25 +2794,22 @@ local function RefreshHistoryUI()
     local dataRows
 
     if currentView == "levels" then
-        historyFrame.windowTitle:SetText(
-            "Played Plus — Level History"
-        )
+        historyFrame.windowTitle:SetText("Played Plus")
+        historyFrame.sectionTitle:SetText("")
         historyFrame.leftHeader:SetText("Level")
         historyFrame.barHeader:SetText("XP progress by source")
         dataRows = CollectLevelRows()
     elseif currentView == "days" then
-        historyFrame.windowTitle:SetText(
-            "Played Plus — Realm Daily History"
-        )
+        historyFrame.windowTitle:SetText("Played Plus")
+        historyFrame.sectionTitle:SetText("")
         historyFrame.leftHeader:SetText("Date")
         historyFrame.barHeader:SetText("Played time by character")
         dataRows = CollectDayRows()
     else
-        historyFrame.windowTitle:SetText(
-            "Played Plus — Account /played"
-        )
+        historyFrame.windowTitle:SetText("Played Plus")
+        historyFrame.sectionTitle:SetText("")
         historyFrame.leftHeader:SetText("Class")
-        historyFrame.barHeader:SetText("Share of lifetime account /played")
+        historyFrame.barHeader:SetText("Share of account")
         dataRows = CollectAccountRows()
     end
 
@@ -2637,10 +2830,13 @@ local function CreateHistoryUI()
         return historyFrame
     end
 
+    -- BasicFrameTemplateWithInset supplies Blizzard's standard portrait-less
+    -- panel chrome, NineSlice border, title background, and close button.
     local frame = CreateFrame(
         "Frame",
         "PlayedPlusHistoryFrame",
-        UIParent
+        UIParent,
+        "BasicFrameTemplateWithInset"
     )
 
     if UISpecialFrames then
@@ -2661,7 +2857,7 @@ local function CreateHistoryUI()
         end
     end
 
-    frame:SetSize(1000, 570)
+    frame:SetSize(900, 500)
     frame:SetPoint("CENTER")
     frame:SetFrameStrata("DIALOG")
     frame:SetClampedToScreen(true)
@@ -2678,62 +2874,127 @@ local function CreateHistoryUI()
         self:StopMovingOrSizing()
     end)
 
-    frame.background = frame:CreateTexture(nil, "BACKGROUND")
-    frame.background:SetAllPoints()
+    -- A translucent parchment-dark content wash sits inside Blizzard's native
+    -- frame chrome. Opacity remains user-configurable without fading text.
+    frame.background = frame:CreateTexture(nil, "BACKGROUND", nil, 1)
+    frame.background:SetPoint("TOPLEFT", frame, "TOPLEFT", 12, -32)
+    frame.background:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -12, 12)
     frame.background:SetTexture("Interface\\Buttons\\WHITE8X8")
 
+    -- Keep this alias for the existing opacity routine. The native template
+    -- owns the visible title bar, so this texture itself stays invisible.
     frame.titleBar = frame:CreateTexture(nil, "BACKGROUND")
-    frame.titleBar:SetPoint("TOPLEFT", 1, -1)
-    frame.titleBar:SetPoint("TOPRIGHT", -1, -1)
-    frame.titleBar:SetHeight(38)
-    frame.titleBar:SetTexture("Interface\\Buttons\\WHITE8X8")
+    frame.titleBar:SetSize(1, 1)
+    frame.titleBar:SetAlpha(0)
 
-    local borders = {}
+    frame.windowTitle = frame.TitleText or CreateText(
+        frame,
+        "GameFontNormalLarge",
+        "TOP",
+        frame,
+        "TOP",
+        0,
+        -8,
+        "CENTER"
+    )
 
-    borders[1] = frame:CreateTexture(nil, "BORDER")
-    borders[1]:SetPoint("TOPLEFT")
-    borders[1]:SetPoint("TOPRIGHT")
-    borders[1]:SetHeight(1)
-
-    borders[2] = frame:CreateTexture(nil, "BORDER")
-    borders[2]:SetPoint("BOTTOMLEFT")
-    borders[2]:SetPoint("BOTTOMRIGHT")
-    borders[2]:SetHeight(1)
-
-    borders[3] = frame:CreateTexture(nil, "BORDER")
-    borders[3]:SetPoint("TOPLEFT")
-    borders[3]:SetPoint("BOTTOMLEFT")
-    borders[3]:SetWidth(1)
-
-    borders[4] = frame:CreateTexture(nil, "BORDER")
-    borders[4]:SetPoint("TOPRIGHT")
-    borders[4]:SetPoint("BOTTOMRIGHT")
-    borders[4]:SetWidth(1)
-
-    for i = 1, 4 do
-        borders[i]:SetTexture("Interface\\Buttons\\WHITE8X8")
-        borders[i]:SetVertexColor(0.45, 0.45, 0.45, 1)
+    -- BasicFrameTemplateWithInset already supplies the Blizzard close button.
+    local closeButton = frame.CloseButton
+    if closeButton then
+        closeButton:SetScript("OnClick", function()
+            frame:Hide()
+        end)
     end
 
-    frame.windowTitle = CreateText(
+    -- Character-sheet style identity block. The live unit portrait keeps this
+    -- native and automatically matches the character being documented.
+    frame.portraitFrame = CreateFrame("Frame", nil, frame)
+    frame.portraitFrame:SetSize(68, 68)
+    frame.portraitFrame:SetPoint("TOPLEFT", frame, "TOPLEFT", 24, -40)
+
+    -- Keep the live portrait at the existing readable size. Avoid scaling the
+    -- low-resolution Minimap tracking artwork; it becomes visibly pixelated.
+    frame.portrait = frame.portraitFrame:CreateTexture(nil, "ARTWORK")
+    frame.portrait:SetSize(56, 56)
+    frame.portrait:SetPoint("CENTER")
+    frame.portrait:SetTexCoord(0.09, 0.91, 0.09, 0.91)
+
+    -- Prefer Blizzard's circular portrait mask when available. The ring stays
+    -- close to its native resolution so it remains crisp instead of pixelating.
+    if frame.portrait.CreateMaskTexture and frame.portrait.AddMaskTexture then
+        frame.portraitMask = frame.portraitFrame:CreateMaskTexture()
+        frame.portraitMask:SetTexture(
+            "Interface\\CharacterFrame\\TempPortraitAlphaMask",
+            "CLAMPTOBLACKADDITIVE",
+            "CLAMPTOBLACKADDITIVE"
+        )
+        frame.portraitMask:SetAllPoints(frame.portrait)
+        frame.portrait:AddMaskTexture(frame.portraitMask)
+    end
+
+    -- Draw our own restrained circular presentation: the portrait is masked to
+    -- a circle, with two thin circular rings layered around it. These use the
+    -- same alpha mask as geometry rather than scaling the chunky Minimap frame.
+    frame.portraitRingOuter = frame.portraitFrame:CreateTexture(nil, "OVERLAY")
+    frame.portraitRingOuter:SetSize(64, 64)
+    frame.portraitRingOuter:SetPoint("CENTER")
+    frame.portraitRingOuter:SetTexture("Interface\\Buttons\\WHITE8X8")
+    frame.portraitRingOuter:SetVertexColor(0.50, 0.34, 0.14, 1)
+
+    frame.portraitRingInner = frame.portraitFrame:CreateTexture(nil, "OVERLAY")
+    frame.portraitRingInner:SetSize(60, 60)
+    frame.portraitRingInner:SetPoint("CENTER")
+    frame.portraitRingInner:SetTexture("Interface\\Buttons\\WHITE8X8")
+    frame.portraitRingInner:SetVertexColor(0.08, 0.06, 0.035, 1)
+
+    if frame.portrait.CreateMaskTexture and frame.portrait.AddMaskTexture then
+        frame.ringMaskOuter = frame.portraitFrame:CreateMaskTexture()
+        frame.ringMaskOuter:SetTexture("Interface\\CharacterFrame\\TempPortraitAlphaMask", "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+        frame.ringMaskOuter:SetAllPoints(frame.portraitRingOuter)
+        frame.portraitRingOuter:AddMaskTexture(frame.ringMaskOuter)
+
+        frame.ringMaskInner = frame.portraitFrame:CreateMaskTexture()
+        frame.ringMaskInner:SetTexture("Interface\\CharacterFrame\\TempPortraitAlphaMask", "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+        frame.ringMaskInner:SetAllPoints(frame.portraitRingInner)
+        frame.portraitRingInner:AddMaskTexture(frame.ringMaskInner)
+    end
+
+    -- Portrait sits above the inner disc, leaving a narrow bronze ring visible.
+    frame.portrait:SetDrawLayer("OVERLAY", 2)
+
+    frame.characterName = CreateText(
         frame,
         "GameFontNormalLarge",
         "TOPLEFT",
         frame,
         "TOPLEFT",
-        18,
-        -11,
+        100,
+        -48,
         "LEFT"
     )
 
-    local closeButton = CreateFlatButton(frame, "X", 26, 26)
-    closeButton:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -8, -6)
-    closeButton.label:SetFontObject("GameFontNormalLarge")
-    closeButton.label:ClearAllPoints()
-    closeButton.label:SetPoint("CENTER", closeButton, "CENTER", 0, -1)
-    closeButton:SetScript("OnClick", function()
-        frame:Hide()
-    end)
+    frame.characterMeta = CreateText(
+        frame,
+        "GameFontHighlightSmall",
+        "TOPLEFT",
+        frame,
+        "TOPLEFT",
+        101,
+        -70,
+        "LEFT"
+    )
+    frame.characterMeta:SetTextColor(0.82, 0.72, 0.52, 1)
+
+    frame.sectionTitle = CreateText(
+        frame,
+        "GameFontNormal",
+        "TOP",
+        frame,
+        "TOP",
+        0,
+        -54,
+        "CENTER"
+    )
 
     frame.summaryLevel = CreateText(
         frame,
@@ -2741,8 +3002,8 @@ local function CreateHistoryUI()
         "TOPLEFT",
         frame,
         "TOPLEFT",
-        24,
-        -54,
+        30,
+        -111,
         "LEFT"
     )
 
@@ -2752,8 +3013,8 @@ local function CreateHistoryUI()
         "TOPLEFT",
         frame,
         "TOPLEFT",
-        370,
-        -54,
+        190,
+        -111,
         "LEFT"
     )
 
@@ -2763,8 +3024,8 @@ local function CreateHistoryUI()
         "TOPLEFT",
         frame,
         "TOPLEFT",
-        680,
-        -54,
+        325,
+        -111,
         "LEFT"
     )
 
@@ -2775,11 +3036,11 @@ local function CreateHistoryUI()
         28
     )
     frame.levelsButton:SetPoint(
-        "TOPLEFT",
+        "TOPRIGHT",
         frame,
-        "TOPLEFT",
-        24,
-        -84
+        "TOPRIGHT",
+        -325,
+        -101
     )
     frame.levelsButton:SetScript("OnClick", function()
         currentView = "levels"
@@ -2824,8 +3085,8 @@ local function CreateHistoryUI()
 
     local syncButton = CreateFlatButton(
         frame,
-        "Sync /played",
-        120,
+        "Sync",
+        78,
         28
     )
     syncButton:SetPoint(
@@ -2833,7 +3094,7 @@ local function CreateHistoryUI()
         frame,
         "TOPRIGHT",
         -24,
-        -84
+        -44
     )
     syncButton:SetScript("OnClick", function()
         RequestPlayedSync()
@@ -2846,14 +3107,14 @@ local function CreateHistoryUI()
         frame,
         "TOPLEFT",
         24,
-        -121
+        -151
     )
     separator:SetPoint(
         "TOPRIGHT",
         frame,
         "TOPRIGHT",
         -24,
-        -121
+        -151
     )
     separator:SetHeight(1)
     separator:SetTexture("Interface\\Buttons\\WHITE8X8")
@@ -2866,7 +3127,7 @@ local function CreateHistoryUI()
         frame,
         "TOPLEFT",
         28,
-        -130,
+        -145,
         "LEFT"
     )
 
@@ -2876,8 +3137,8 @@ local function CreateHistoryUI()
         "TOPLEFT",
         frame,
         "TOPLEFT",
-        112,
-        -130,
+        106,
+        -145,
         "LEFT"
     )
     timeHeader:SetText("Time played")
@@ -2888,8 +3149,8 @@ local function CreateHistoryUI()
         "TOPLEFT",
         frame,
         "TOPLEFT",
-        222,
-        -130,
+        208,
+        -145,
         "CENTER"
     )
 
@@ -2899,8 +3160,8 @@ local function CreateHistoryUI()
         "TOPLEFT",
         frame,
         "TOPLEFT",
-        720,
-        -130,
+        718,
+        -145,
         "CENTER"
     )
     frame.detailsHeader:SetWidth(160)
@@ -2912,8 +3173,8 @@ local function CreateHistoryUI()
         "TOPLEFT",
         frame,
         "TOPLEFT",
-        892,
-        -130,
+        820,
+        -145,
         "CENTER"
     )
     frame.statusHeader:SetWidth(65)
@@ -2977,9 +3238,10 @@ local function CreateHistoryUI()
     end
 
     CompactLegend(28, XP_COLORS.mob, "Kills · mob XP")
-    CompactLegend(215, XP_COLORS.quest, "Quests · turn-ins")
-    CompactLegend(420, XP_COLORS.dungeon, "Dungeon · kill XP")
-    CompactLegend(640, XP_COLORS.other, "Other · exploration")
+    CompactLegend(180, XP_COLORS.quest, "Quests · turn-ins")
+    CompactLegend(345, XP_COLORS.dungeon, "Dungeon · kill XP")
+    CompactLegend(520, XP_COLORS.exploration, "Exploration XP")
+    CompactLegend(680, XP_COLORS.other, "Other · unclassified")
 
     frame.dayLegendHint = frame:CreateFontString(
         nil,
@@ -2996,6 +3258,7 @@ local function CreateHistoryUI()
 
     frame:SetScript("OnShow", function()
         ApplyWindowOpacity()
+        RefreshCharacterHeader()
         RefreshHistoryUI()
     end)
 
@@ -3033,7 +3296,6 @@ end
 function PlayedPlus_ResetDisplayDefaults()
     local db = EnsureDatabase()
 
-    db.windowOpacity = 0.70
     db.showLabels = true
     db.showTooltips = true
     db.showDetails = true
@@ -3138,6 +3400,7 @@ local function ShowHelp()
     Print("/pp sync - request a fresh /played total")
     Print("/pp xplog [number|all] - show current-level XP ledger")
     Print("/pp debugxp - toggle live XP debug logging")
+    Print("/pp integrity - audit persisted history without changing it")
     Print("/ptp remains available as a compatibility alias")
 end
 
@@ -3181,6 +3444,55 @@ SlashCmdList["PLAYEDPLUS"] = function(msg)
             "Live XP debug logging "
             .. (db.debugXPLog and "|cff33ff33enabled|r." or "|cffff5555disabled|r.")
         )
+    elseif msg == "integrity" then
+        local db = EnsureDatabase()
+        local liveLevel = UnitLevel("player") or 0
+        local storedLevel = tonumber(db.currentLevel) or 0
+        local levelCount, minLevel, maxLevel, ledgerCount, summaryCount = 0, nil, nil, 0, 0
+        local dayCount = 0
+
+        for key, levelData in pairs(db.levels or {}) do
+            if type(levelData) == "table" then
+                local level = tonumber(levelData.level) or tonumber(key)
+                levelCount = levelCount + 1
+                if level then
+                    minLevel = not minLevel and level or math.min(minLevel, level)
+                    maxLevel = not maxLevel and level or math.max(maxLevel, level)
+                end
+                ledgerCount = ledgerCount + #(levelData.ledger or {})
+                if type(levelData.summary) == "table" then
+                    summaryCount = summaryCount + 1
+                end
+            end
+        end
+
+        for _ in pairs(db.days or {}) do
+            dayCount = dayCount + 1
+        end
+
+        local accountDB = EnsureAccountDatabase()
+        local realmCount, characterCount, accountDayCount = 0, 0, 0
+        for _, realm in pairs(accountDB.realms or {}) do
+            realmCount = realmCount + 1
+            for _ in pairs(realm.characters or {}) do
+                characterCount = characterCount + 1
+            end
+            for _ in pairs(realm.days or {}) do
+                accountDayCount = accountDayCount + 1
+            end
+        end
+
+        Print(string.format(
+            "Integrity: live L%d | stored L%d | records %d (L%s-L%s) | summaries %d | ledger events %d | days %d",
+            liveLevel, storedLevel, levelCount, tostring(minLevel or "?"), tostring(maxLevel or "?"),
+            summaryCount, ledgerCount, dayCount
+        ))
+        Print(string.format(
+            "Account: %d realm%s | %d character%s | %d day record%s",
+            realmCount, realmCount == 1 and "" or "s",
+            characterCount, characterCount == 1 and "" or "s",
+            accountDayCount, accountDayCount == 1 and "" or "s"
+        ))
     elseif msg == "account" then
         RequestPlayedSync()
 
@@ -3247,6 +3559,7 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         local db = EnsureDatabase()
 
         MigrateLedger()
+        EnsureHistoricalSummaries()
         EnsureAccountDatabase()
         ImportLegacyCharacterDays()
         SyncAllCharacterDaysToAccount()
@@ -3338,6 +3651,10 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
             or oldLevelData.xpRequired <= 0 then
             oldLevelData.xpRequired = observedXPMax or 0
         end
+
+        -- Freeze the completed level into its compact permanent summary.
+        -- Recovery build: keep the raw ledger as well; no pruning yet.
+        BuildLevelSummary(oldLevelData)
 
         db.currentLevel = newLevel
 

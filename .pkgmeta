@@ -1,0 +1,6 @@
+package-as: PlayedPlus
+
+ignore:
+  - .github
+  - .gitignore
+  - ARCHITECTURE.md

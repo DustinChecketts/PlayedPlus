@@ -1,29 +1,43 @@
 # Played Plus — Architecture
 
-Version 1.0.0 is a maintenance release. It establishes the public Played Plus name and adds account-wide lifetime `/played` aggregation across every realm observed by the addon.
+Played Plus is maintained as one addon codebase across supported Classic clients and WoW Forever. The architecture keeps the existing tracking model intact while isolating Blizzard client differences.
 
-## Core rules
+## Design goals
+
+- Preserve current Played Plus behavior and SavedVariables.
+- Keep one addon version across supported clients.
+- Prefer capability detection over client/version checks.
+- Keep Blizzard API/client compatibility in `Compat.lua`.
+- Keep gameplay tracking, XP classification, account aggregation, and UI behavior in `PlayedPlus.lua`.
+- Keep settings controls in `Options.lua`.
+- Avoid intentional behavior changes during compatibility-only refactors.
+
+WoW Forever must not be treated as Retail solely because it currently reports `WOW_PROJECT_MAINLINE`. When explicit identification is required, the current Forever beta uses the 16xxx interface generation (currently 16001).
+
+## Core data rules
 
 ### XP collection
 
-`UnitXP("player")` deltas are the authoritative source of XP gained.
+`UnitXP("player")` deltas remain the authoritative source of XP gained.
 
-Quest, combat, dungeon, and exploration events are classification signals.
-They annotate an XP transaction that has already been captured. They must not
-create an independent XP total.
+Quest, combat, dungeon, and exploration events are classification signals. They annotate an XP transaction that has already been captured and must not create an independent XP total.
 
-A level-up can require two internal ledger fragments so XP can be assigned to
-the correct levels. Both fragments share a `transactionID` and
-`transactionAmount`, so `/ptp xplog` and live debug logging still report one
-logical XP transaction.
+A level-up can require two internal ledger fragments so XP can be assigned to the correct levels. Both fragments share a `transactionID` and `transactionAmount`, so reporting still represents one logical XP transaction.
 
 ### Played time
 
 `PlayedPlusDB.days[date].seconds` is authoritative for each character.
 
-`PlayedPlusAccountDB` is an account-wide reporting index grouped by
-realm. It stores a snapshot of each character's daily total. Snapshot
-assignment is intentional: do not maintain a second incrementing account timer.
+`PlayedPlusAccountDB` is an account-wide reporting index grouped by realm. It stores snapshots of each character's daily total. Snapshot assignment is intentional; do not maintain a second incrementing account timer.
+
+## File responsibilities
+
+- `Compat.lua` — Blizzard client/API detection and compatibility helpers.
+- `PlayedPlus.lua` — tracking, SavedVariables migrations, XP ledger/classification, account aggregation, tracker UI, commands, and game events.
+- `Options.lua` — Blizzard AddOns settings controls only.
+- `PlayedPlus.toc` — supported interfaces, metadata, SavedVariables, and load order.
+- `.pkgmeta` — release package contents.
+- `.github/workflows/release.yml` — tag/browser release packaging and CurseForge publishing.
 
 ## SavedVariables
 
@@ -31,164 +45,43 @@ assignment is intentional: do not maintain a second incrementing account timer.
 
 Important areas:
 
-- `days[YYYY-MM-DD]`
-  - `seconds`
-  - `quests`
-  - `mobs`
-  - `dungeons`
-- `levels[level]`
-  - `seconds`
-  - `quests`
-  - `mobs`
-  - `dungeons`
-  - `ledger[]`
-- preferences
-  - `windowOpacity`
-  - `showLabels`
-  - `showTooltips`
-  - `showDetails`
-  - `showStatus`
-  - `debugXPLog`
+- `days[YYYY-MM-DD]`: seconds, quests, mobs, dungeons
+- `levels[level]`: seconds, quests, mobs, dungeons, ledger
+- display/debug preferences
 
 ### Account-wide: `PlayedPlusAccountDB`
 
-- `realms[realmName]`
-  - `characters[Name-Realm]`
-    - `name`
-    - `realm`
-    - `classFile`
-    - `guid`
-    - `lastSeenAt`
-  - `days[YYYY-MM-DD].characters[Name-Realm]`
-    - `name`
-    - `classFile`
-    - `seconds`
-    - `syncedAt`
+- `realms[realmName].characters[Name-Realm]`
+- `realms[realmName].days[YYYY-MM-DD].characters[Name-Realm]`
 
-## Canonical XP ledger
+The legacy `PlayedTrackerPlusDB` and `PlayedTrackerPlusAccountDB` names remain loaded for rename migration.
 
-A modern ledger entry contains fields such as:
+## Compatibility strategy
 
-- `id`
-- `at`
-- `level`
-- `amount`
-- `source`
-- `subtype`
-- `reason`
-- `captureReason`
-- `classificationPriority`
-- `transactionID`
-- `transactionAmount`
-- `primary`
-- `zone`
-- `instanceName`
-- `instanceType`
+Feature code should use capability checks where Blizzard exposes equivalent functionality through different APIs. Event registration that may vary by client should be guarded instead of assuming every event exists.
 
-Current source values:
+ForeverTest established the main compatibility rules used by this refactor:
 
-- `mob`
-- `quest`
-- `dungeon`
-- `other`
+- modern `Settings` APIs are available on Forever;
+- legacy `InterfaceOptions*` APIs cannot be assumed;
+- use individually confirmed/needed events rather than broad event sweeps;
+- do not infer Forever from `WOW_PROJECT_ID` alone.
 
-Useful subtypes:
+The existing XP and `/played` behavior is intentionally preserved for the first Forever test branch. Any Forever-only gameplay divergence discovered in live testing should be handled behind `Compat.lua` rather than forked into a second addon.
 
-- `kill`
-- `quest`
-- `exploration`
-- `unclassified`
+## Release workflow
 
-## Runtime-only state
+`main` is the known-good/release branch. Compatibility work is developed on branches and merged only after testing.
 
-Do not persist these:
+Releases use the same workflow established for VendorPricePlus:
 
-- recent XP transactions
-- pending classification signals
-- the UnitXP observation baseline
-- timer/poll accumulators
-- UI frame references
-- dungeon-completion debounce state
+1. Merge tested code to `main`.
+2. Run **Package and release** from GitHub Actions and enter a semantic version, or push a `v*` tag.
+3. The workflow creates/checks out the version tag.
+4. BigWigs Packager builds the addon and publishes the GitHub release and CurseForge file using the repository `CF_API_KEY` secret.
 
-They exist only to join asynchronous Blizzard events to the correct persisted
-transaction.
-
-## UI semantics
-
-### Levels view
-
-- bar width = overall progress through the level
-- colored bar portions = source mix of XP earned
-- percentages inside segments/tooltips = share of earned XP
-- gold percentage beside the current fill = overall level progress
-
-### Days view
-
-- row time = total played time across tracked characters on the current realm
-- each segment = one character
-- segment color = WoW class color
-- tooltip = character identity, class, time, and share of the day
-
-## Extension points
-
-### Add an XP source/classifier
-
-1. Register/handle the relevant Blizzard event.
-2. Call `CaptureXPBarDelta()` first.
-3. Parse the reported XP amount when available.
-4. Call `QueueClassificationSignal()`.
-5. Assign a priority matching the confidence of that source.
-6. Never add another XP aggregate.
-
-### Add a derived level statistic
-
-Prefer deriving it from the ledger. Persist only information that cannot be
-reconstructed from authoritative data.
-
-### Add account/realm reporting
-
-Keep character-owned totals authoritative and sync snapshots to the shared
-realm database. Do not create a second independent timer.
-
-### Add options
-
-`Options.lua` should only change preferences and refresh the tracker. Keep
-game/event logic in `PlayedPlus.lua`.
-
-## Debug commands
-
-- `/ptp xplog [number|all]` — canonical XP transactions
-- `/ptp debugxp` — finalized live XP transaction logging
-- `/ptp account` — synchronized characters and today's realm time
-- `/ptp sync` — request Blizzard `/played`
+The packager action is pinned to the reviewed v2.6.1 commit with explicit WoW Forever 16xxx support.
 
 ## Versioning and migrations
 
-The addon version and SavedVariables schema versions are intentionally
-separate.
-
-Increment `DB_VERSION`, `ACCOUNT_DB_VERSION`, or `LEDGER_VERSION` only when a
-data migration is required. Refactors and UI-only changes should not force a
-migration.
-
-
-## Account-wide lifetime `/played`
-
-Each time a character is logged into, Played Plus requests Blizzard's
-`RequestTimePlayed()` value and stores the returned lifetime total in the
-account-wide character index.
-
-This works across realms because `PlayedPlusAccountDB` is account-wide
-SavedVariables data. WoW cannot query offline characters, so a character must
-be logged into with Played Plus enabled at least once before it can appear in
-the Account tab.
-
-The Account tab derives class totals from all stored realm/character records.
-No separate account timer is maintained.
-
-## Rename migration
-
-Played Plus 1.0.0 loads the legacy `PlayedTrackerPlusDB` and
-`PlayedTrackerPlusAccountDB` SavedVariables names so existing users retain
-their data. If the new variables do not yet exist, the old tables are adopted
-as the new Played Plus databases automatically.
+Addon versions and SavedVariables schema versions are separate. Increment `DB_VERSION`, `ACCOUNT_DB_VERSION`, or `LEDGER_VERSION` only when persisted data requires migration. Compatibility refactors and UI-only changes should not force a data migration.
