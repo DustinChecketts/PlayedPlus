@@ -51,8 +51,10 @@ Important areas:
 
 ### Account-wide: `PlayedPlusAccountDB`
 
-- `realms[realmName].characters[Name-Realm]`
-- `realms[realmName].days[YYYY-MM-DD].characters[Name-Realm]`
+- `realms[realmName].characters[GUID:<playerGUID>]`
+- `realms[realmName].days[YYYY-MM-DD].characters[GUID:<playerGUID>]`
+
+Character GUIDs are the canonical account identity. Display names are mutable metadata because Forever may expose a character by first name before later exposing its surname-bearing display name. Legacy name-keyed records are migrated conservatively to GUID keys when sufficient identity data is available; lifetime `/played` and daily snapshots use the greatest authoritative snapshot rather than summing duplicates.
 
 The legacy `PlayedTrackerPlusDB` and `PlayedTrackerPlusAccountDB` names remain loaded for rename migration.
 
