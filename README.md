@@ -1,6 +1,6 @@
 ## **Played Plus**
 
-A World of Warcraft: Classic (Anniversary, Seasons, Hardcore, Era) addon that expands /played into a visual history of how you spent your time and earned your experience.
+A World of Warcraft addon for WoW Forever and Classic (Anniversary, Seasons, Hardcore, Era) that expands /played into a visual history of how you spent your time and earned your experience.
 
 Played Plus tracks time played by level and day, records your leveling activity, and classifies the XP you earn so you can see how much came from kills, quests, dungeon kills, exploration, and other sources. It also keeps an account-wide view of lifetime /played for characters and realms the addon has seen.
 
@@ -8,15 +8,15 @@ Instead of only answering _how long have I played?_, Played Plus helps answer _w
 
 ### **Features**
 
-*   **Level History** - See time played, XP progress, quests completed, kill count, and dungeons completed per level (while tracked by Played Plus - progress prior to installing Played Plus is uknown).
-*   **XP Tracking** - Breaks earned XP into Kills, Quests, Dungeon, and Other classifications.
+*   **Level History** - See time played, XP progress, quests completed, kill count, and dungeons completed per level (while tracked by Played Plus - progress prior to installing Played Plus is unknown).
+*   **XP Tracking** - Breaks earned XP into Kills, Quests, Dungeon, Exploration, and Other classifications.
 *   **XP Visualized** - A color-coded bar shows level progress and where your earned XP came from.
 *   **XP History** - Review tracked playtime by date, class, and character on the current realm.
 *   **Account /played** - View lifetime /played totals by class across all characters on the current realm.
 *   **Character Details** - Hover account totals to see the individual characters, levels, and playtime.
 *   **XP Log** - An XP transaction history to inspect individual gains and their classifications.
 *   **XP Interface** - A compact interface to navigate and view all of the above.
-*   **Configurable -** Control opacity, labels, tooltips, detail columns, and status information from the Blizzard AddOns settings.
+*   **Configurable -** Control labels, tooltips, detail columns, status information, and XP debugging from the Blizzard AddOns settings.
 
 ### **XP Tracking**
 
@@ -24,11 +24,12 @@ Played Plus observes XP gained while the addon is running and records each XP in
 
 This lets the Level History show not only how quickly you leveled, but how you earned the XP that got you there.
 
-XP is displayed in four categories:
+XP is displayed in five categories:
 
 *   **Kills** - XP earned from world enemies
 *   **Quests** - XP awarded from quest turn-ins
 *   **Dungeon** - XP earned from enemies inside dungeons
+*   **Exploration** - XP earned from discovering new areas
 *   **Other** - Infrequent XP or XP that cannot accurately be classified
 
 ### **Account Tracking**
