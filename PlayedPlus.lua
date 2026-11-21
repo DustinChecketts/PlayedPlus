@@ -50,6 +50,7 @@ local XP_POLL_INTERVAL = 0.25
 local XP_SIGNAL_WINDOW = 3.0
 local XP_DEBUG_SETTLE_DELAY = 1.50
 local MAX_ROWS = 10
+local historyScrollOffsets = { levels = 0, days = 0 }
 
 local sessionStarted = false
 local lastTick = nil
@@ -2465,10 +2466,6 @@ local function CollectLevelRows()
     -- exist instead of assuming db.currentLevel defines the valid range.
     -- This keeps older/later records visible even if metadata was damaged.
     for _, level in ipairs(levels) do
-        if #rows >= MAX_ROWS then
-            break
-        end
-
         local levelData = db.levels[level]
 
         if levelData then
@@ -2500,7 +2497,7 @@ local function CollectDayRows()
     local keys = GetAccountDayRows()
     local rows = {}
 
-    for i = 1, math.min(MAX_ROWS, #keys) do
+    for i = 1, #keys do
         local dateKey = keys[i]
         local segments, totalSeconds = GetAccountDayBreakdown(dateKey)
 
@@ -2736,6 +2733,12 @@ local function RefreshHistoryUI()
     local _, accountPlayed, accountCharacters, accountRealms =
         GetAccountLifetimeData()
 
+    historyFrame.summaryCharacter:SetText(
+        "|cffffd100Character Total|r  |cffffffff"
+        .. FormatDuration(db.lastKnownTotalPlayed)
+        .. "|r"
+    )
+
     historyFrame.summaryTotal:SetText(
         "|cffffd100Account|r  |cffffffff"
         .. FormatDuration(accountPlayed)
@@ -2813,9 +2816,30 @@ local function RefreshHistoryUI()
         dataRows = CollectAccountRows()
     end
 
+    -- Recycle visible rows without changing historical records.
+    local scrollable = currentView == "levels" or currentView == "days"
+    local maxOffset = math.max(0, #dataRows - MAX_ROWS)
+    local offset = scrollable and (historyScrollOffsets[currentView] or 0) or 0
+    offset = math.max(0, math.min(maxOffset, offset))
+
+    if scrollable then
+        historyScrollOffsets[currentView] = offset
+    end
+
+    local scrollbar = historyFrame.historyScrollbar
+    if scrollbar then
+        scrollbar:SetMinMaxValues(0, maxOffset)
+        scrollbar:SetValue(offset)
+        if scrollable and maxOffset > 0 then
+            scrollbar:Show()
+        else
+            scrollbar:Hide()
+        end
+    end
+
     for i = 1, MAX_ROWS do
         local row = historyFrame.rows[i]
-        local data = dataRows[i]
+        local data = dataRows[i + offset]
 
         if data then
             RenderRow(row, data, currentView)
@@ -3013,7 +3037,18 @@ local function CreateHistoryUI()
         "TOPLEFT",
         frame,
         "TOPLEFT",
-        190,
+        170,
+        -111,
+        "LEFT"
+    )
+
+    frame.summaryCharacter = CreateText(
+        frame,
+        "GameFontHighlight",
+        "TOPLEFT",
+        frame,
+        "TOPLEFT",
+        310,
         -111,
         "LEFT"
     )
@@ -3024,7 +3059,7 @@ local function CreateHistoryUI()
         "TOPLEFT",
         frame,
         "TOPLEFT",
-        325,
+        545,
         -111,
         "LEFT"
     )
@@ -3040,7 +3075,7 @@ local function CreateHistoryUI()
         frame,
         "TOPRIGHT",
         -325,
-        -101
+        -67
     )
     frame.levelsButton:SetScript("OnClick", function()
         currentView = "levels"
@@ -3185,6 +3220,36 @@ local function CreateHistoryUI()
     for i = 1, MAX_ROWS do
         frame.rows[i] = CreateHistoryRow(frame, i)
     end
+
+    -- Blizzard scrollbar; both scroll methods share a view-specific offset.
+    frame.historyScrollbar = CreateFrame(
+        "Slider", nil, frame, "UIPanelScrollBarTemplate"
+    )
+    frame.historyScrollbar:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -13, -169)
+    frame.historyScrollbar:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -13, 53)
+    frame.historyScrollbar:SetMinMaxValues(0, 0)
+    frame.historyScrollbar:SetValueStep(1)
+    frame.historyScrollbar:SetScript("OnValueChanged", function(self, value)
+        if currentView == "account" then return end
+        local offset = math.floor(value + 0.5)
+        if historyScrollOffsets[currentView] ~= offset then
+            historyScrollOffsets[currentView] = offset
+            RefreshHistoryUI()
+        end
+    end)
+    frame.historyScrollbar:Hide()
+
+    frame:EnableMouseWheel(true)
+    frame:SetScript("OnMouseWheel", function(self, delta)
+        if currentView == "account" then return end
+        local offset = historyScrollOffsets[currentView] or 0
+        local maxOffset = select(2, self.historyScrollbar:GetMinMaxValues())
+        local nextOffset = math.max(0, math.min(maxOffset, offset - delta))
+        if nextOffset ~= offset then
+            historyScrollOffsets[currentView] = nextOffset
+            RefreshHistoryUI()
+        end
+    end)
 
     local legendSeparator = frame:CreateTexture(nil, "ARTWORK")
     legendSeparator:SetPoint(
